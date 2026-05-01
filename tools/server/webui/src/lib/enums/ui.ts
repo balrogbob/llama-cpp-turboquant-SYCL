@@ -4,13 +4,6 @@ export enum ColorMode {
 	SYSTEM = 'system'
 }
 
-export enum TooltipSide {
-	TOP = 'top',
-	RIGHT = 'right',
-	BOTTOM = 'bottom',
-	LEFT = 'left'
-}
-
 /**
  * MCP prompt display variant
  */
@@ -28,8 +21,4 @@ export enum UrlProtocol {
 	HTTPS = 'https://',
 	WEBSOCKET = 'ws://',
 	WEBSOCKET_SECURE = 'wss://'
-}
-
-export enum HtmlInputType {
-	FILE = 'file'
 }

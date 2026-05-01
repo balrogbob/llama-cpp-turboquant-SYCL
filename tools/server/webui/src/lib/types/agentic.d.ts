@@ -69,7 +69,6 @@ export interface AgenticSession {
 	totalToolCalls: number;
 	lastError: Error | null;
 	streamingToolCall: { name: string; arguments: string } | null;
-	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
 }
 
 /**
@@ -147,12 +146,4 @@ export interface AgenticFlowParams {
 export interface AgenticFlowResult {
 	handled: boolean;
 	error?: Error;
-}
-
-/**
- * A user message to be injected into the agentic loop between turns.
- */
-export interface SteeringMessage {
-	content: string;
-	extras?: DatabaseMessageExtra[];
 }

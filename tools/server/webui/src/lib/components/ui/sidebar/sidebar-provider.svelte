@@ -4,8 +4,7 @@
 	import {
 		SIDEBAR_COOKIE_MAX_AGE,
 		SIDEBAR_COOKIE_NAME,
-		SIDEBAR_MIN_WIDTH,
-		SIDEBAR_MAX_WIDTH,
+		SIDEBAR_WIDTH,
 		SIDEBAR_WIDTH_ICON
 	} from './constants.js';
 	import { setSidebar } from './context.svelte.js';
@@ -39,7 +38,7 @@
 
 <div
 	data-slot="sidebar-wrapper"
-	style="--sidebar-width: {sidebar.sidebarWidth}; --sidebar-min-width: {SIDEBAR_MIN_WIDTH}; --sidebar-max-width: {SIDEBAR_MAX_WIDTH}; --sidebar-width-icon: {SIDEBAR_WIDTH_ICON}; {style}"
+	style="--sidebar-width: {SIDEBAR_WIDTH}; --sidebar-width-icon: {SIDEBAR_WIDTH_ICON}; {style}"
 	class={cn(
 		'group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar',
 		className

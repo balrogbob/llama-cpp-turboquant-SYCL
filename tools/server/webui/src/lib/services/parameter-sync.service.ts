@@ -204,6 +204,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		canSync: true
 	},
 	{
+		key: 'autoShowSidebarOnNewChat',
+		serverKey: 'autoShowSidebarOnNewChat',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
 		key: 'showRawModelNames',
 		serverKey: 'showRawModelNames',
 		type: SyncableParameterType.BOOLEAN,
@@ -361,7 +367,7 @@ export class ParameterSyncService {
 
 	/**
 	 * Get parameter information including source and values.
-	 * Used by SettingsChatParameterSourceIndicator to display the correct badge
+	 * Used by ChatSettingsParameterSourceIndicator to display the correct badge
 	 * (Custom vs Default) for each parameter in the settings UI.
 	 *
 	 * @param key - The parameter key to get info for

@@ -95,8 +95,8 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 
 struct ggml_metal_library {
     id<MTLLibrary> obj;
+    id<MTLDevice> device;
 
-    ggml_metal_device_t dev;
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
 
     NSLock * lock;
@@ -288,7 +288,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
 
     res->obj       = library;
-    res->dev       = dev;
+    res->device    = device;
     res->pipelines = ggml_metal_pipelines_init();
     res->lock      = [NSLock new];
 
@@ -355,7 +355,7 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
     }
 
     res->obj       = library;
-    res->dev       = dev;
+    res->device    = device;
     res->pipelines = ggml_metal_pipelines_init();
     res->lock      = [NSLock new];
 
@@ -376,10 +376,6 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
     [lib->lock release];
 
     free(lib);
-}
-
-ggml_metal_device_t ggml_metal_library_get_device(ggml_metal_library_t lib) {
-    return lib->dev;
 }
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline(ggml_metal_library_t lib, const char * name) {
@@ -446,8 +442,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
             return res;
         }
 
-        id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
-        id<MTLComputePipelineState> obj = [device newComputePipelineStateWithFunction:mtl_function error:&error];
+        id<MTLComputePipelineState> obj = [lib->device newComputePipelineStateWithFunction:mtl_function error:&error];
 
         [mtl_function release];
 
@@ -741,7 +736,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                     "    auto sB = tB.slice(0, 0); \n"
                     "    mm.run(sB, sA, cT); \n"
                     " \n"
-                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
+                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(4, 4)); \n"
                     " \n"
                     "    cT.store(tC); \n"
                     "}";
@@ -791,7 +786,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                     "    auto sB = tB.slice(0, 0); \n"
                     "    mm.run(sB, sA, cT); \n"
                     " \n"
-                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
+                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(4, 4)); \n"
                     " \n"
                     "    cT.store(tC); \n"
                     "}";
@@ -856,7 +851,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             }
 
             // print MTL GPU family:
-            GGML_LOG_INFO("%s: GPU name:   %s (%s)\n", __func__, dev->props.name, dev->props.desc);
+            GGML_LOG_INFO("%s: GPU name:   %s\n", __func__, dev->props.name);
 
             // determine max supported GPU family
             // https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf

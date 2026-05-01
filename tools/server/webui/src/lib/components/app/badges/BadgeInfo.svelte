@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { cn } from '$lib/components/ui/utils';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -12,10 +13,10 @@
 </script>
 
 <button
-	class={[
+	class={cn(
 		'inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75',
 		className
-	]}
+	)}
 	{onclick}
 >
 	{#if icon}

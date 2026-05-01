@@ -51,12 +51,6 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ## News
 
-- 2026.04
-
-  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q_K, Q8_0.
-  - Fused MoE.
-  - Upgrate CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
-
 - 2026.03
   - Support Flash-Attention: less memory usage, performance impact depends on LLM.
 
@@ -355,12 +349,6 @@ Choose one of following methods to run.
 ./examples/sycl/test.sh
 ```
 
-- Run llama-server:
-
-```sh
-./examples/sycl/start-svr.sh -m PATH/MODEL_FILE
-```
-
 2. Command line
 Launch inference
 
@@ -649,16 +637,8 @@ Choose one of following methods to run.
 
 1. Script
 
-- Run test:
-
 ```
 examples\sycl\win-test.bat
-```
-
-- Run llama-server:
-
-```
-examples\sycl\win-start-svr.bat -m PATH\MODEL_FILE
 ```
 
 2. Command line

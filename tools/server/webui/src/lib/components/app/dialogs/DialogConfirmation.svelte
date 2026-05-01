@@ -34,7 +34,6 @@
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
-
 			onConfirm();
 		}
 		onKeydown?.(event);
@@ -53,7 +52,6 @@
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if icon}
 					{@const IconComponent = icon}
-
 					<IconComponent class="h-5 w-5 {variant === 'destructive' ? 'text-destructive' : ''}" />
 				{/if}
 				{title}

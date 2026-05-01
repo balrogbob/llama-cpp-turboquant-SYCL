@@ -1,7 +1,8 @@
 <script lang="ts">
+	import { Search, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -110,7 +111,21 @@
 </script>
 
 <div class="space-y-4">
-	<SearchInput bind:value={searchQuery} placeholder="Search conversations..." />
+	<div class="relative">
+		<Search class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+
+		<Input bind:value={searchQuery} placeholder="Search conversations..." class="pr-9 pl-9" />
+
+		{#if searchQuery}
+			<button
+				class="absolute top-1/2 right-3 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+				onclick={() => (searchQuery = '')}
+				type="button"
+			>
+				<X class="h-4 w-4" />
+			</button>
+		{/if}
+	</div>
 
 	<div class="flex items-center justify-between text-sm text-muted-foreground">
 		<span>
@@ -154,15 +169,15 @@
 						{#each filteredConversations as conv (conv.id)}
 							<tr
 								class="cursor-pointer border-b transition-colors hover:bg-muted/50"
-								onclick={(event) => toggleConversation(conv.id, event.shiftKey)}
+								onclick={(e) => toggleConversation(conv.id, e.shiftKey)}
 							>
 								<td class="p-3">
 									<Checkbox
 										checked={selectedIds.has(conv.id)}
-										onclick={(event) => {
-											event.preventDefault();
-											event.stopPropagation();
-											toggleConversation(conv.id, event.shiftKey);
+										onclick={(e) => {
+											e.preventDefault();
+											e.stopPropagation();
+											toggleConversation(conv.id, e.shiftKey);
 										}}
 									/>
 								</td>

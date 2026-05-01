@@ -1,17 +1,15 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { cn } from '$lib/components/ui/utils';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
-	import McpLogo from './McpLogo.svelte';
 
 	interface Props {
 		class?: string;
-		onclick?: () => void;
 	}
 
-	let { class: className = '', onclick }: Props = $props();
+	let { class: className = '' }: Props = $props();
 
 	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
@@ -30,60 +28,30 @@
 	let mcpFavicons = $derived(
 		healthyEnabledMcpServers
 			.slice(0, MAX_DISPLAYED_MCP_AVATARS)
-			.map((s) => ({
-				id: s.id,
-				name: mcpStore.getServerDisplayName(s.id),
-				url: mcpStore.getServerFavicon(s.id)
-			}))
+			.map((s) => ({ id: s.id, url: mcpStore.getServerFavicon(s.id) }))
 			.filter((f) => f.url !== null)
 	);
 </script>
 
-{#if !hasEnabledMcpServers}
-	<button
-		class={[
-			'inline-flex cursor-pointer items-center gap-0.75 opacity-70 transition-opacity hover:opacity-100',
-			className,
-			'opacity-50 hover:opacity-100'
-		]}
-		{onclick}
-	>
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				<McpLogo class="h-4 w-4" />
-			</Tooltip.Trigger>
-
-			<Tooltip.Content>
-				<p>MCP Servers</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
-	</button>
-{:else if mcpFavicons.length > 0}
-	<button class={['inline-flex items-center gap-0.75', className]} {onclick}>
+{#if hasEnabledMcpServers && mcpFavicons.length > 0}
+	<div class={cn('inline-flex items-center gap-1.5', className)}>
 		<div class="flex -space-x-1">
 			{#each mcpFavicons as favicon (favicon.id)}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
-							<img
-								src={favicon.url}
-								alt=""
-								class="h-4 w-4"
-								onerror={(e) => {
-									(e.currentTarget as HTMLImageElement).style.display = 'none';
-								}}
-							/>
-						</div>
-					</Tooltip.Trigger>
-					<Tooltip.Content>
-						<p>{favicon.name}</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
+				<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
+					<img
+						src={favicon.url}
+						alt=""
+						class="h-4 w-4"
+						onerror={(e) => {
+							(e.currentTarget as HTMLImageElement).style.display = 'none';
+						}}
+					/>
+				</div>
 			{/each}
 		</div>
 
 		{#if extraServersCount > 0}
 			<span class="text-xs text-muted-foreground">+{extraServersCount}</span>
 		{/if}
-	</button>
+	</div>
 {/if}

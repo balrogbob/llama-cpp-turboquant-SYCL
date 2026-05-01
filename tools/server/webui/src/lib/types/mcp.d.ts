@@ -1,5 +1,4 @@
 import type { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums/mcp';
-import type { ToolSource } from '$lib/enums/tools';
 import type {
 	Client,
 	ClientCapabilities as SDKClientCapabilities,
@@ -255,16 +254,6 @@ export interface ToolCallParams {
 export interface ToolExecutionResult {
 	content: string;
 	isError: boolean;
-}
-
-export interface ServerBuiltinToolInfo {
-	display_name: string;
-	tool: string;
-	type: ToolSource.BUILTIN;
-	permissions: {
-		write: boolean;
-	};
-	definition: OpenAIToolDefinition;
 }
 
 /**

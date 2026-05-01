@@ -119,32 +119,6 @@ llama_kv_cache::llama_kv_cache(
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
-    // Auto-asymmetric: when symmetric turbo K+V is requested and the model has
-    // high GQA ratio (few KV heads serving many Q heads), upgrade K to q8_0.
-    // Turbo K quantization error gets amplified by the GQA broadcast factor.
-    // Qwen2.5: 4 KV heads / 28 Q heads = 7:1 → turbo3 K PPL catastrophic (2887 vs 7.4 baseline)
-    // Mistral:  8 KV heads / 32 Q heads = 4:1 → turbo3 K works fine (+4.4% PPL)
-    // Threshold: GQA ratio >= 6 triggers auto-asymmetric.
-    {
-        const bool k_is_turbo = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 || type_k == GGML_TYPE_TURBO2_0);
-        if (k_is_turbo) {
-            const uint32_t n_head    = hparams.n_head(0);
-            const uint32_t n_head_kv = hparams.n_head_kv(0);
-            const uint32_t gqa_ratio = (n_head_kv > 0) ? n_head / n_head_kv : 1;
-
-            const char * env = getenv("TURBO_AUTO_ASYMMETRIC");
-            const bool disabled = (env && env[0] == '0');
-
-            if (!disabled && gqa_ratio >= 6 && type_k == type_v) {
-                LLAMA_LOG_WARN("%s: auto-asymmetric: GQA ratio %u:1 (n_head=%u, n_head_kv=%u) — "
-                               "upgrading K from %s to q8_0 to prevent quality degradation. "
-                               "Disable with TURBO_AUTO_ASYMMETRIC=0\n",
-                               __func__, gqa_ratio, n_head, n_head_kv, ggml_type_name(type_k));
-                type_k = GGML_TYPE_Q8_0;
-            }
-        }
-    }
-
     const uint32_t n_layer_kv = hparams.n_layer_kv();
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
@@ -462,62 +436,28 @@ llama_kv_cache::llama_kv_cache(
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
 
-    // TurboQuant: master's #21038 attention rotation is OFF by default on this
-    // fork. Enable per-side via LLAMA_ATTN_ROT_K_OVERRIDE=1 and/or
-    // LLAMA_ATTN_ROT_V_OVERRIDE=1 if your specific model+KV combo benefits.
-    //
-    // Why default OFF: empirical PPL+KLD testing on 7 model families
-    // (gemma-4 26B-A4B/31B/E2B, Qwen2.5-7B, Qwen3.5-2B, Mistral-Small-24B,
-    // phi-4, on q8/turbo4 KV) showed the optimal rotation policy is highly
-    // model-and-quant specific:
-    //
-    //   • gemma-4 31B Q8 q8/turbo4: V-only rotation gives -43% PPL (huge win).
-    //   • gemma-4 26B-A4B Q8 q8/turbo4: V-only gives -3.9%.
-    //   • gemma-4 E2B Q4_K_L q8/turbo4: V-only HURTS by +6.7%.
-    //   • phi-4 Q8 q8/turbo4: V-side rotation crashes (graph hash overflow).
-    //   • Qwen2.5/3.5/Mistral: rotation effect is within standard error.
-    //
-    // No single default is correct everywhere, including within the same
-    // architecture family (gemma-4 above shows three distinct optima across
-    // three sizes). Per-arch heuristics in code would silently regress users
-    // on variants we haven't tested. Default OFF + per-side env knobs lets
-    // each user tune for their specific config; documented findings in the
-    // README guide the choice.
-    //
-    // Reported by @erazortt (TheTom/turboquant_plus#88).
-    //
-    // LLAMA_ATTN_ROT_DISABLE retained as a no-op alias (default OFF makes it
-    // redundant but historical scripts may set it).
-    // Default attn_rot_disable=false now that rotation is OFF by default. The
-    // env var is preserved as a hard lock-out (=1 forces rotation off and
-    // blocks overrides), useful for users who want to guarantee no rotation
-    // regardless of any LLAMA_ATTN_ROT_*_OVERRIDE settings.
+    // TurboQuant: disable upstream graph-level activation rotation by default.
+    // Our fork uses kernel-level WHT rotation (simd_shuffle_xor in Metal/CUDA)
+    // which is independent and more efficient. The upstream rotation adds extra
+    // graph nodes that cause hash table overflow on some models (e.g. Phi-4).
+    // Users can re-enable with LLAMA_ATTN_ROT_DISABLE=0 if needed.
     const char * LLAMA_ATTN_ROT_DISABLE = getenv("LLAMA_ATTN_ROT_DISABLE");
-    const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? (atoi(LLAMA_ATTN_ROT_DISABLE) != 0) : false;
-
-    // Default: rotation OFF on both sides (safe across all tested model families).
-    // Override per side via env vars below.
-    attn_rot_k = false;
-    attn_rot_v = false;
-
-    // Per-side overrides. Set LLAMA_ATTN_ROT_K_OVERRIDE=1 / LLAMA_ATTN_ROT_V_OVERRIDE=1
-    // to enable rotation. The cache type and head-dim alignment guards below
-    // still apply: rotation only takes effect on quantized types with
-    // head_dim % 64 == 0 (master's #21038 requirements).
-    const char * ROT_K_OV = getenv("LLAMA_ATTN_ROT_K_OVERRIDE");
-    if (ROT_K_OV && atoi(ROT_K_OV) != 0 && !attn_rot_disable) {
-        attn_rot_k =
-            n_embd_head_k_all > 0 &&
-            ggml_is_quantized(type_k) &&
-            hparams.n_embd_head_k() % 64 == 0;
+    const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? atoi(LLAMA_ATTN_ROT_DISABLE) : true;
+    if (attn_rot_disable) {
+        LLAMA_LOG_INFO("%s: upstream attention rotation disabled (TurboQuant uses kernel-level WHT)\n", __func__);
     }
-    const char * ROT_V_OV = getenv("LLAMA_ATTN_ROT_V_OVERRIDE");
-    if (ROT_V_OV && atoi(ROT_V_OV) != 0 && !attn_rot_disable) {
-        attn_rot_v =
-            n_embd_head_v_all > 0 &&
-            ggml_is_quantized(type_v) &&
-            hparams.n_embd_head_v() % 64 == 0;
-    }
+
+    attn_rot_k =
+        !attn_rot_disable &&
+        n_embd_head_k_all > 0 &&
+        ggml_is_quantized(type_k) &&
+        hparams.n_embd_head_k() % 64 == 0;
+
+    attn_rot_v =
+        !attn_rot_disable &&
+        n_embd_head_v_all > 0 &&
+        ggml_is_quantized(type_v) &&
+        hparams.n_embd_head_v() % 64 == 0;
 
     LLAMA_LOG_INFO("%s: attn_rot_k = %d, n_embd_head_k_all = %d\n", __func__, attn_rot_k, n_embd_head_k_all);
     LLAMA_LOG_INFO("%s: attn_rot_v = %d, n_embd_head_k_all = %d\n", __func__, attn_rot_v, n_embd_head_v_all);
@@ -1601,23 +1541,14 @@ ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
     ggml_tensor * res = nullptr;
 
     if (attn_rot_k) {
-        // EXPERIMENT (master TODO): force smallest rotation matrix (nrot=64)
-        // for K, mirroring V's choice. Master defaults to the largest power-of-2
-        // that divides head_dim, but the upstream comment hypothesizes smaller
-        // tiles preserve more local structure → less PPL hit on sensitive models
-        // (gemma-4 26B-A4B reportedly regresses with the largest tile).
-        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
-        const char * LLAMA_ATTN_ROT_K_NROT = getenv("LLAMA_ATTN_ROT_K_NROT");
-        int nrot = LLAMA_ATTN_ROT_K_NROT ? atoi(LLAMA_ATTN_ROT_K_NROT) : 64;
+        int nrot = 64;
 
-        // Original master behavior (largest power-of-2): set LLAMA_ATTN_ROT_K_NROT=0
-        if (nrot == 0) {
-            nrot = 64;
-            do {
-                nrot *= 2;
-            } while (n_embd_head_k_all % nrot == 0);
-            nrot /= 2;
-        }
+        // TODO: investigate if using the smallest rotation matrix is beneficial also for K (similar as for V)
+        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
+        do {
+            nrot *= 2;
+        } while (n_embd_head_k_all % nrot == 0);
+        nrot /= 2;
 
         res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);
         ggml_set_input(res);
@@ -1871,8 +1802,148 @@ skip:
     }
 }
 
+template<bool causal, bool swa, bool is_2d, bool alibi>
+static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, ggml_fp16_t * data) {
+    const auto & ubatch  = args.ubatch;
+
+    const auto & v_cells       = args.v_cells;
+    const auto & seq_to_stream = args.seq_to_stream;
+
+    const uint32_t       n_swa    = args.n_swa;
+    const llama_swa_type swa_type = args.swa_type;
+
+    const int64_t n_kv     = args.n_kv;
+    const int64_t n_stream = args.n_stream;
+    const int64_t n_tps    = args.n_tps;
+
+    llama_pos seq_pos_min[LLAMA_MAX_SEQ];
+    std::fill(seq_pos_min, seq_pos_min + LLAMA_MAX_SEQ, INT32_MAX);
+
+    for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+        const llama_seq_id seq_id = ubatch->seq_id[i][0];
+
+        seq_pos_min[seq_id] = std::min(seq_pos_min[seq_id], ubatch->pos[i]);
+    }
+
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        std::unordered_map<llama_seq_id, uint32_t>              seq_srct;
+        std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idxs;
+
+        for (uint32_t ii = 0; ii < n_tps; ++ii) {
+            const uint32_t i = s*n_tps + ii;
+
+            const llama_seq_id seq_id = ubatch->seq_id[i][0];
+
+            const auto & cells = v_cells.at(seq_to_stream[seq_id]);
+
+                  llama_pos p0 = -1;
+            const llama_pos p1 = ubatch->pos[i];
+
+            const llama_pos p1_x = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
+            const llama_pos p1_y = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
+
+            const uint64_t idst = n_kv*i;
+
+            bool prev = false;
+
+            auto & idxs = seq_idxs[seq_id];
+
+            if (!alibi) {
+                if (seq_srct.find(seq_id) != seq_srct.end()) {
+                    const uint32_t srct = seq_srct[seq_id];
+
+                    const uint64_t idst_prev = n_kv*srct;
+
+                    std::copy(data + idst_prev, data + idst_prev + n_kv, data + idst);
+
+                    prev = true;
+                } else {
+                    idxs.clear();
+                    idxs.reserve(ubatch->n_tokens + n_swa + 32);
+
+                    seq_srct[seq_id] = i;
+                }
+            }
+
+            for (uint32_t jj = 0; jj < n_kv; ++jj) {
+                uint32_t j = jj;
+
+                if (!alibi) {
+                    if (prev) {
+                        if (jj >= idxs.size()) {
+                            break;
+                        }
+
+                        j = idxs[jj];
+                    }
+                }
+
+                if (cells.is_empty(j)) {
+                    goto skip;
+                }
+
+                if (!cells.seq_has(j, seq_id)) {
+                    goto skip;
+                }
+
+                p0 = cells.pos_get(j);
+
+                if (!alibi) {
+                    if (!prev) {
+                        if (p0 + (int32_t) (n_swa + 32) >= seq_pos_min[seq_id]) {
+                            idxs.push_back(j);
+                        }
+                    }
+                }
+
+                if (causal) {
+                    if (p0 > p1) {
+                        goto skip;
+                    }
+
+                    if (is_2d) {
+                        if (p0 == p1) {
+                            const auto & p0_ext = cells.ext_get(j);
+
+                            if (p0_ext.is_2d_gt(p1_x, p1_y)) {
+                                goto skip;
+                            }
+                        }
+                    }
+                }
+
+                if (swa) {
+                    if (llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1)) {
+                        goto skip;
+                    }
+                }
+
+                if (alibi) {
+                    data[idst + j] = ggml_fp32_to_fp16(-std::abs(p0 - p1));
+                } else {
+                    data[idst + j] = ggml_fp32_to_fp16(0.0f);
+                }
+
+                continue;
+skip:
+                data[idst + j] = ggml_fp32_to_fp16(-INFINITY);
+            }
+        }
+    }
+}
+
 template<bool causal, bool swa, bool is_2d>
 static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * data) {
+    const bool alibi = args.hparams.use_alibi;
+    if (alibi) {
+        set_input_kq_mask_impl<causal, swa, is_2d, true> (args, data);
+    } else {
+        set_input_kq_mask_impl<causal, swa, is_2d, false>(args, data);
+    }
+}
+
+template<bool causal, bool swa, bool is_2d>
+static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, ggml_fp16_t * data) {
     const bool alibi = args.hparams.use_alibi;
     if (alibi) {
         set_input_kq_mask_impl<causal, swa, is_2d, true> (args, data);
@@ -1891,8 +1962,28 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
     }
 }
 
+template<bool causal, bool swa>
+static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, ggml_fp16_t * data) {
+    const bool is_2d = args.ubatch->is_pos_2d();
+    if (is_2d) {
+        set_input_kq_mask_impl<causal, swa, true> (args, data);
+    } else {
+        set_input_kq_mask_impl<causal, swa, false>(args, data);
+    }
+}
+
 template<bool causal>
 static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * data) {
+    const bool swa = args.swa_type != LLAMA_SWA_TYPE_NONE;
+    if (swa) {
+        set_input_kq_mask_impl<causal, true> (args, data);
+    } else {
+        set_input_kq_mask_impl<causal, false>(args, data);
+    }
+}
+
+template<bool causal>
+static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, ggml_fp16_t * data) {
     const bool swa = args.swa_type != LLAMA_SWA_TYPE_NONE;
     if (swa) {
         set_input_kq_mask_impl<causal, true> (args, data);
@@ -1905,7 +1996,6 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     const uint32_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    float * data = (float *) dst->data;
 
     const int64_t n_kv     = dst->ne[0];
     const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
@@ -1929,10 +2019,21 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         /*.n_tps            =*/ n_tps,
     };
 
-    if (causal_attn) {
-        set_input_kq_mask_impl<true> (args, data);
+    if (dst->type == GGML_TYPE_F16) {
+        ggml_fp16_t * data = (ggml_fp16_t *) dst->data;
+        if (causal_attn) {
+            set_input_kq_mask_impl<true> (args, data);
+        } else {
+            set_input_kq_mask_impl<false>(args, data);
+        }
     } else {
-        set_input_kq_mask_impl<false>(args, data);
+        GGML_ASSERT(dst->type == GGML_TYPE_F32);
+        float * data = (float *) dst->data;
+        if (causal_attn) {
+            set_input_kq_mask_impl<true> (args, data);
+        } else {
+            set_input_kq_mask_impl<false>(args, data);
+        }
     }
 
     //const int64_t t_end = ggml_time_us();

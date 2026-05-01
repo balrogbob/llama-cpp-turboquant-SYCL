@@ -1,6 +1,5 @@
 import { getContext, setContext } from 'svelte';
 import { CONTEXT_KEY_MESSAGE_EDIT } from '$lib/constants';
-import { MessageRole } from '$lib/enums';
 
 export interface MessageEditState {
 	readonly isEditing: boolean;
@@ -10,10 +9,6 @@ export interface MessageEditState {
 	readonly originalContent: string;
 	readonly originalExtras: DatabaseMessageExtra[];
 	readonly showSaveOnlyOption: boolean;
-	readonly showBranchAfterEditOption: boolean;
-	readonly shouldBranchAfterEdit: boolean;
-	readonly messageRole: MessageRole;
-	readonly rawEditContent?: string;
 }
 
 export interface MessageEditActions {
@@ -26,13 +21,7 @@ export interface MessageEditActions {
 	startEdit: () => void;
 }
 
-export interface AssistantEditActions {
-	setShouldBranchAfterEdit: (value: boolean) => void;
-}
-
-export type MessageEditContext = MessageEditState &
-	MessageEditActions &
-	Partial<AssistantEditActions>;
+export type MessageEditContext = MessageEditState & MessageEditActions;
 
 const MESSAGE_EDIT_KEY = Symbol.for(CONTEXT_KEY_MESSAGE_EDIT);
 

@@ -10,7 +10,6 @@
 #include <dspqueue.h>
 #include <stdatomic.h>
 #include <stdint.h>
-#include <stdbool.h>
 
 #define HTP_MAX_NTHREADS 10
 #define HTP_MAX_MMAPS    16
@@ -20,7 +19,7 @@ struct htp_mmap {
     uint64_t size;
     uint64_t base;
     uint32_t fd;
-    uint32_t reserved;
+    uint32_t pinned;
 };
 
 // Scratchpad state
@@ -67,17 +66,13 @@ struct htp_context {
     int                    thread_id;
     int                    thread_prio;
 
-    bool                   hmx_enabled;
-    bool                   etm;
-    uint32_t               profiler;
+    int                    hmx_enabled;
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;
     uint32_t               vtcm_rctx;
     atomic_bool            vtcm_valid;
     atomic_bool            vtcm_needs_release;
-
-    uint64_t               max_vmem;
 
     struct htp_ops_context octx;
 
@@ -105,6 +100,5 @@ int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
 int op_diag(struct htp_ops_context * octx);
-int op_solve_tri(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

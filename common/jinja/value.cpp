@@ -590,10 +590,6 @@ static bool string_endswith(const std::string & str, const std::string & suffix)
     return str.compare(str.length() - suffix.length(), suffix.length(), suffix) == 0;
 }
 
-[[noreturn]] static value string_join_not_implemented(const func_args &) {
-    throw not_implemented_exception("String join builtin not implemented");
-}
-
 const func_builtins & value_string_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
@@ -855,7 +851,9 @@ const func_builtins & value_string_t::get_builtins() const {
             res->val_str.mark_input_based_on(val_input->as_string());
             return res;
         }},
-        {"join", string_join_not_implemented},
+        {"join", [](const func_args &) -> value {
+            throw not_implemented_exception("String join builtin not implemented");
+        }},
     };
     return builtins;
 }
@@ -886,9 +884,6 @@ const func_builtins & value_bool_t::get_builtins() const {
     return builtins;
 }
 
-[[noreturn]] static value array_unique_not_implemented(const func_args &) {
-    throw not_implemented_exception("Array unique builtin not implemented");
-}
 
 const func_builtins & value_array_t::get_builtins() const {
     static const func_builtins builtins = {
@@ -1089,14 +1084,13 @@ const func_builtins & value_array_t::get_builtins() const {
             std::reverse(arr.begin(), arr.end());
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
-        {"unique", array_unique_not_implemented},
+        {"unique", [](const func_args &) -> value {
+            throw not_implemented_exception("Array unique builtin not implemented");
+        }},
     };
     return builtins;
 }
 
-[[noreturn]] static value object_join_not_implemented(const func_args &) {
-    throw not_implemented_exception("object join not implemented");
-}
 
 const func_builtins & value_object_t::get_builtins() const {
     if (!has_builtins) {
@@ -1189,7 +1183,9 @@ const func_builtins & value_object_t::get_builtins() const {
             });
             return result;
         }},
-        {"join", object_join_not_implemented},
+        {"join", [](const func_args &) -> value {
+            throw not_implemented_exception("object join not implemented");
+        }},
     };
     return builtins;
 }

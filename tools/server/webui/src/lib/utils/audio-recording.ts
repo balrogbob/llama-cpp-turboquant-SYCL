@@ -43,48 +43,27 @@ export class AudioRecorder {
 
 	async stopRecording(): Promise<Blob> {
 		return new Promise((resolve, reject) => {
-			const recorder = this.mediaRecorder;
-			const chunks = this.audioChunks;
-			const stream = this.stream;
-
-			if (!recorder || recorder.state === 'inactive') {
+			if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
 				reject(new Error('No active recording to stop'));
 				return;
 			}
 
-			// Detach instance state right away so a new startRecording can take over without race
-			this.mediaRecorder = null;
-			this.audioChunks = [];
-			this.stream = null;
-			this.recordingState = false;
+			this.mediaRecorder.onstop = () => {
+				const mimeType = this.mediaRecorder?.mimeType || MimeTypeAudio.WAV;
+				const audioBlob = new Blob(this.audioChunks, { type: mimeType });
 
-			recorder.onstop = () => {
-				const audioBlob = new Blob(chunks, {
-					type: recorder.mimeType || MimeTypeAudio.WAV
-				});
-
-				if (stream) {
-					for (const track of stream.getTracks()) {
-						track.stop();
-					}
-				}
+				this.cleanup();
 
 				resolve(audioBlob);
 			};
 
-			recorder.onerror = (event) => {
+			this.mediaRecorder.onerror = (event) => {
 				console.error('Recording error:', event);
-
-				if (stream) {
-					for (const track of stream.getTracks()) {
-						track.stop();
-					}
-				}
-
+				this.cleanup();
 				reject(new Error('Recording failed'));
 			};
 
-			recorder.stop();
+			this.mediaRecorder.stop();
 		});
 	}
 
@@ -93,26 +72,10 @@ export class AudioRecorder {
 	}
 
 	cancelRecording(): void {
-		const recorder = this.mediaRecorder;
-		const stream = this.stream;
-
-		this.mediaRecorder = null;
-		this.audioChunks = [];
-		this.stream = null;
-		this.recordingState = false;
-
-		if (recorder && recorder.state !== 'inactive') {
-			// Drop the original handlers so the pending stop event does not touch the instance
-			recorder.onstop = null;
-			recorder.onerror = null;
-			recorder.stop();
+		if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+			this.mediaRecorder.stop();
 		}
-
-		if (stream) {
-			for (const track of stream.getTracks()) {
-				track.stop();
-			}
-		}
+		this.cleanup();
 	}
 
 	private initializeRecorder(stream: MediaStream): void {
@@ -147,6 +110,19 @@ export class AudioRecorder {
 			this.recordingState = false;
 		};
 	}
+
+	private cleanup(): void {
+		if (this.stream) {
+			for (const track of this.stream.getTracks()) {
+				track.stop();
+			}
+
+			this.stream = null;
+		}
+		this.mediaRecorder = null;
+		this.audioChunks = [];
+		this.recordingState = false;
+	}
 }
 
 export async function convertToWav(audioBlob: Blob): Promise<Blob> {
@@ -160,12 +136,13 @@ export async function convertToWav(audioBlob: Blob): Promise<Blob> {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-		try {
-			const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-			return audioBufferToWav(audioBuffer);
-		} finally {
-			audioContext.close();
-		}
+		const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+		const wavBlob = audioBufferToWav(audioBuffer);
+
+		audioContext.close();
+
+		return wavBlob;
 	} catch (error) {
 		console.error('Failed to convert audio to WAV:', error);
 		return audioBlob;
@@ -205,20 +182,12 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	writeString(36, 'data'); // Subchunk2ID
 	view.setUint32(40, dataSize, true); // Subchunk2Size
 
-	// Cache channel arrays, write PCM via Int16Array (native little-endian, matches WAV)
-	const channels: Float32Array[] = new Array(numberOfChannels);
-	for (let c = 0; c < numberOfChannels; c++) {
-		channels[c] = buffer.getChannelData(c);
-	}
-
-	const pcm = new Int16Array(arrayBuffer, 44, length * numberOfChannels);
-	let p = 0;
+	let offset = 44;
 	for (let i = 0; i < length; i++) {
-		for (let c = 0; c < numberOfChannels; c++) {
-			let s = channels[c][i];
-			if (s > 1) s = 1;
-			else if (s < -1) s = -1;
-			pcm[p++] = s * 0x7fff;
+		for (let channel = 0; channel < numberOfChannels; channel++) {
+			const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+			view.setInt16(offset, sample * 0x7fff, true);
+			offset += 2;
 		}
 	}
 

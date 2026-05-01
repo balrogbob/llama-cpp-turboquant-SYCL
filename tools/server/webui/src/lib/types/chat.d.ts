@@ -25,11 +25,22 @@ export interface ChatAttachmentDisplayItem {
 	size?: number;
 	preview?: string;
 	isImage: boolean;
+	isMcpPrompt?: boolean;
+	isMcpResource?: boolean;
 	isLoading?: boolean;
 	loadError?: string;
 	uploadedFile?: ChatUploadedFile;
 	attachment?: DatabaseMessageExtra;
 	attachmentIndex?: number;
+	textContent?: string;
+}
+
+export interface ChatAttachmentPreviewItem {
+	uploadedFile?: ChatUploadedFile;
+	attachment?: DatabaseMessageExtra;
+	preview?: string;
+	name?: string;
+	size?: number;
 	textContent?: string;
 }
 

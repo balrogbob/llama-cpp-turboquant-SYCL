@@ -11,7 +11,6 @@
 		class?: string;
 		id?: string;
 		ref?: HTMLInputElement | null;
-		isCancelAlwaysVisible?: boolean;
 	}
 
 	let {
@@ -22,11 +21,10 @@
 		onKeyDown,
 		class: className,
 		id,
-		ref = $bindable(null),
-		isCancelAlwaysVisible = false
+		ref = $bindable(null)
 	}: Props = $props();
 
-	let showClearButton = $derived(isCancelAlwaysVisible || !!value || !!onClose);
+	let showClearButton = $derived(!!value || !!onClose);
 
 	function handleInput(event: Event) {
 		const target = event.target as HTMLInputElement;
@@ -65,7 +63,7 @@
 	{#if showClearButton}
 		<button
 			type="button"
-			class="absolute top-1/2 right-3 -translate-y-1/2 transform cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
+			class="absolute top-1/2 right-3 -translate-y-1/2 transform text-muted-foreground transition-colors hover:text-foreground"
 			onclick={handleClear}
 			aria-label={value ? 'Clear search' : 'Close'}
 		>
