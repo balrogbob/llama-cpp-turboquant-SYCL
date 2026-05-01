@@ -17,7 +17,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
-- **SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow.**
+- **SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow. NOTE: Flash Attention is NON-OPTIONAL, SYCL lacks some hardware, but the FA kernels dont need it. Without FA, processing is on CPU only and very slow!**
 - **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
@@ -68,6 +68,7 @@ range of hardware - locally and in the cloud.
 - RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
 - 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
 - Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
+- Custom SYCL kernels to support TurboQuant.
 - Vulkan and SYCL backend support, including TurboQuant in the SYCL path
 - CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
 
