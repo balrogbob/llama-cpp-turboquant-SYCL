@@ -68,6 +68,7 @@ range of hardware - locally and in the cloud.
 - RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
 - 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
 - Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
+- Custom SYCL kernels to support TurboQuant.
 - Vulkan and SYCL backend support, including TurboQuant in the SYCL path
 - CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
 
