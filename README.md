@@ -17,6 +17,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
+- **SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow.**
 - **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
@@ -54,6 +55,8 @@ llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
 llama-server -hf ggml-org/gemma-3-1b-it-GGUF
 ```
 
+For a clean Windows SYCL build in a fresh directory, see [SYCL TurboQuant build (Windows)](#sycl-turboquant-build-windows).
+
 ## Description
 
 The main goal of `llama.cpp` is to enable LLM inference with minimal setup and state-of-the-art performance on a wide
@@ -65,7 +68,7 @@ range of hardware - locally and in the cloud.
 - RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
 - 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
 - Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
-- Vulkan and SYCL backend support
+- Vulkan and SYCL backend support, including TurboQuant in the SYCL path
 - CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
 
 The `llama.cpp` project is the main playground for developing new features for the [ggml](https://github.com/ggml-org/ggml) library.
@@ -293,6 +296,36 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 | [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
 | [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
+
+## SYCL TurboQuant build (Windows)
+
+This fork includes SYCL TurboQuant support. Build it in a clean out-of-tree directory so you do not reuse an older cache or an example-script configuration.
+
+1. Open a oneAPI-enabled Visual Studio 2022 shell.
+
+   ```bat
+   call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 vs2022
+   ```
+
+2. Configure a fresh `build-turbo` directory.
+
+   ```bat
+   cmake -S . -B build-turbo -G Ninja -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DCMAKE_BUILD_TYPE=Release
+   ```
+
+3. Build the server target.
+
+   ```bat
+   cmake --build build-turbo --target llama-server --parallel
+   ```
+
+4. Run the binary from the fresh tree.
+
+   ```bat
+   .\build-turbo\bin\llama-server.exe -m model.gguf
+   ```
+
+   For a TurboQuant smoke test, add your cache flags, for example `-ctv turbo4 -ctk turbo4`.
 
 ## Obtaining and quantizing models
 

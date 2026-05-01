@@ -207,6 +207,18 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
+        case GGML_TYPE_TURBO2_0:
+            get_rows_sycl<QK_TURBO2, 2, dequantize_turbo2_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            src1_i32, (float *)dst->data, ctx.stream());
+            break;
+        case GGML_TYPE_TURBO3_0:
+            get_rows_sycl<QK_TURBO3, 2, dequantize_turbo3_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            src1_i32, (float *)dst->data, ctx.stream());
+            break;
+        case GGML_TYPE_TURBO4_0:
+            get_rows_sycl<QK_TURBO4, 2, dequantize_turbo4_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            src1_i32, (float *)dst->data, ctx.stream());
+            break;
         default:
             // TODO: k-quants
             GGML_LOG_ERROR("%s: unsupported type: %s\n", __func__, ggml_type_name(dst->src[0]->type));

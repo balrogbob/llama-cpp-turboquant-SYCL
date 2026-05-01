@@ -1,5 +1,6 @@
 #include "set_rows.hpp"
 #include "cpy.hpp"
+#include "dequantize.hpp"
 
 namespace utils {
 template<typename T>
@@ -151,6 +152,94 @@ static void set_rows_sycl(
     );
 }
 
+template <typename TIdx, typename block_t, int qk, uint8_t (*nearest_centroid)(float)>
+static void set_rows_sycl_turbo(
+        const char * src0_d, const TIdx * src1_d, char * dst_d,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t ne11, const int64_t ne12,
+        const size_t nb01, const size_t nb02, const size_t nb03,
+        const size_t nb10, const size_t nb11, const size_t nb12,
+        const size_t nb1, const size_t nb2, const size_t nb3,
+        queue_ptr stream) {
+
+    constexpr int group_size = 128;
+    const int64_t n_groups = ne00 / group_size;
+    const int64_t total_groups = n_groups * ne01 * ne02 * ne03;
+    constexpr int block_size = 256;
+    const int64_t grid_size = ceil_div(total_groups, block_size);
+
+    stream->parallel_for(sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
+        const int64_t g = item_ct1.get_global_linear_id();
+        if (g >= total_groups) {
+            return;
+        }
+
+        const int64_t i_grp = g % n_groups;
+        int64_t tmp = g / n_groups;
+        const int64_t i01 = tmp % ne01;
+        tmp /= ne01;
+        const int64_t i02 = tmp % ne02;
+        const int64_t i03 = tmp / ne02;
+
+        const int64_t i10 = i01;
+        const int64_t i11 = i02 % ne11;
+        const int64_t i12 = i03 % ne12;
+
+        const size_t src_offset = calculate_offset<3>({ nb01, nb02, nb03 }, { i01, i02, i03 });
+        const size_t src1_offset = calculate_offset<3>({ nb10, nb11, nb12 }, { i10, i11, i12 });
+        const int64_t dst_row = src1_d[src1_offset / sizeof(TIdx)];
+        const float * src_row = (const float *)(src0_d + src_offset);
+        block_t * dst_row_ptr = (block_t *)((char *)dst_d + dst_row * nb1 + i02 * nb2 + i03 * nb3);
+        block_t * blk = dst_row_ptr + i_grp;
+
+        float buf[128];
+        float norm_sq = 0.0f;
+        for (int j = 0; j < group_size; ++j) {
+            const float v = src_row[i_grp * group_size + j];
+            buf[j] = v;
+            norm_sq += v * v;
+        }
+
+        const float grp_norm = sycl::sqrt(norm_sq);
+        const float inv_norm = grp_norm > 1e-10f ? 1.0f / grp_norm : 0.0f;
+        for (int j = 0; j < group_size; ++j) {
+            buf[j] *= inv_norm;
+        }
+
+        turbo_rotate_forward(buf);
+
+        const int blocks_per_group = group_size / qk;
+        float recon_sq = 0.0f;
+        for (int b = 0; b < blocks_per_group; ++b) {
+            block_t * out = blk + b;
+            std::memset(out, 0, sizeof(block_t));
+            for (int j = 0; j < qk; ++j) {
+                const uint8_t idx = nearest_centroid(buf[b * qk + j]);
+                if constexpr (std::is_same_v<block_t, block_turbo3_0>) {
+                    out->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+                    out->signs[j / 8] |= ((idx >> 2) & 1) << (j % 8);
+                    recon_sq += TURBO_CENTROIDS_3BIT[idx] * TURBO_CENTROIDS_3BIT[idx];
+                } else if constexpr (std::is_same_v<block_t, block_turbo2_0>) {
+                    out->qs[j / 4] |= (idx & 0x3) << ((j % 4) * 2);
+                    recon_sq += TURBO_CENTROIDS_2BIT[idx] * TURBO_CENTROIDS_2BIT[idx];
+                } else {
+                    out->qs[j / 2] |= (idx & 0xF) << ((j % 2) * 4);
+                    recon_sq += TURBO_CENTROIDS_4BIT[idx] * TURBO_CENTROIDS_4BIT[idx];
+                }
+            }
+        }
+
+        const float recon_norm = sycl::sqrt(recon_sq);
+        const float corrected_norm = recon_norm > 1e-10f ? grp_norm / recon_norm : grp_norm;
+        for (int b = 0; b < blocks_per_group; ++b) {
+            blk[b].norm = corrected_norm;
+            if constexpr (std::is_same_v<block_t, block_turbo4_0> && TURBO4_USE_4BIT) {
+                blk[b].rnorm = 0;
+            }
+        }
+    });
+}
+
 template<typename TIn, typename TIdx>
 static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const char * src0_d = (const char *)src0->data;
@@ -216,6 +305,36 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             break;
         case GGML_TYPE_IQ4_NL:
             set_rows_sycl_q<TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(src0_d, src1_d, (block_iq4_nl *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TURBO2_0:
+            set_rows_sycl_turbo<TIdx, block_turbo2_0, QK_TURBO2, turbo_nearest_centroid_2bit>(
+                src0_d, src1_d, (char *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                stream);
+            break;
+        case GGML_TYPE_TURBO3_0:
+            set_rows_sycl_turbo<TIdx, block_turbo3_0, QK_TURBO3, turbo_nearest_centroid_3bit>(
+                src0_d, src1_d, (char *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                stream);
+            break;
+        case GGML_TYPE_TURBO4_0:
+            set_rows_sycl_turbo<TIdx, block_turbo4_0, QK_TURBO4, turbo_nearest_centroid_4bit>(
+                src0_d, src1_d, (char *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                stream);
             break;
 
         default:

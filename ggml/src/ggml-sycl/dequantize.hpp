@@ -20,6 +20,121 @@ typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
                                             const int iqs, dfloat2 &v);
 
+static const float TURBO_CENTROIDS_2BIT[4] = {
+    -0.133462f, -0.039994f, 0.039994f, 0.133462f
+};
+
+static const float TURBO_CENTROIDS_3BIT[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+
+static const float TURBO_CENTROIDS_4BIT[16] = {
+    -0.173926f, -0.117195f, -0.089527f, -0.068756f,
+    -0.051262f, -0.035597f, -0.020989f, -0.006938f,
+     0.006938f,  0.020989f,  0.035597f,  0.051262f,
+     0.068756f,  0.089527f,  0.117195f,  0.173926f
+};
+
+static const float TURBO_WHT_SIGNS1[128] = {
+    -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+     1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+    -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f,
+     1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f,
+    -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,
+     1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f,
+    -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f,
+     1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f
+};
+
+static const float TURBO_WHT_SIGNS2[128] = {
+     1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+     1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f,
+     1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f,
+     1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,
+     1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f,
+    -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f,
+     1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f,
+    -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f
+};
+
+static __dpct_inline__ void turbo_fwht_128(float * x) {
+    for (int h = 1; h < 128; h *= 2) {
+        for (int i = 0; i < 128; i += h * 2) {
+            for (int j = i; j < i + h; j++) {
+                const float a = x[j];
+                const float b = x[j + h];
+                x[j] = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+
+    const float inv_sqrt_128 = 0.08838834764831845f;
+    for (int i = 0; i < 128; i++) {
+        x[i] *= inv_sqrt_128;
+    }
+}
+
+static __dpct_inline__ void turbo_rotate_forward(float * x) {
+    for (int i = 0; i < 128; i++) {
+        x[i] *= TURBO_WHT_SIGNS1[i];
+    }
+    turbo_fwht_128(x);
+    for (int i = 0; i < 128; i++) {
+        x[i] *= TURBO_WHT_SIGNS2[i];
+    }
+}
+
+static __dpct_inline__ uint8_t turbo_nearest_centroid_2bit(float val) {
+    if (val < -0.086728f) return 0;
+    if (val <  0.0f)      return 1;
+    if (val <  0.086728f) return 2;
+    return 3;
+}
+
+static __dpct_inline__ uint8_t turbo_nearest_centroid_3bit(float val) {
+    if (val < -0.154259f) return 0;
+    if (val < -0.091775f) return 1;
+    if (val < -0.043589f) return 2;
+    if (val <  0.0f)      return 3;
+    if (val <  0.043589f) return 4;
+    if (val <  0.091775f) return 5;
+    if (val <  0.154259f) return 6;
+    return 7;
+}
+
+static __dpct_inline__ uint8_t turbo_nearest_centroid_4bit(float val) {
+    if      (val < -0.145561f) return  0;
+    else if (val < -0.103361f) return  1;
+    else if (val < -0.079142f) return  2;
+    else if (val < -0.060009f) return  3;
+    else if (val < -0.043430f) return  4;
+    else if (val < -0.028293f) return  5;
+    else if (val < -0.013964f) return  6;
+    else if (val <  0.0f)      return  7;
+    else if (val <  0.013964f) return  8;
+    else if (val <  0.028293f) return  9;
+    else if (val <  0.043430f) return 10;
+    else if (val <  0.060009f) return 11;
+    else if (val <  0.079142f) return 12;
+    else if (val <  0.103361f) return 13;
+    else if (val <  0.145561f) return 14;
+    return 15;
+}
+
+static __dpct_inline__ float turbo_dequant_2bit(uint8_t idx, float norm) {
+    return TURBO_CENTROIDS_2BIT[idx & 3] * norm;
+}
+
+static __dpct_inline__ float turbo_dequant_3bit(uint8_t idx, float norm) {
+    return TURBO_CENTROIDS_3BIT[idx & 7] * norm;
+}
+
+static __dpct_inline__ float turbo_dequant_4bit(uint8_t idx, float norm) {
+    return TURBO_CENTROIDS_4BIT[idx & 15] * norm;
+}
+
 static __dpct_inline__ void dequantize_q4_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q4_0 * x = (const block_q4_0 *) vx;
@@ -177,6 +292,42 @@ static __dpct_inline__ void dequantize_q8_0(const void *vx, const int64_t ib,
     v.x() *= d;
     v.y() *= d;
 #endif // GGML_SYCL_F16
+}
+
+static __dpct_inline__ void dequantize_turbo2_0(const void *vx, const int64_t ib,
+                                                const int iqs, dfloat2 &v) {
+    const block_turbo2_0 * x = (const block_turbo2_0 *) vx;
+    const float norm = (const float) x[ib].norm;
+    const int byte = iqs >> 2;
+    const int shift0 = (iqs & 3) * 2;
+    const int shift1 = ((iqs + 1) & 3) * 2;
+    const uint8_t q = x[ib].qs[byte];
+    v.x() = turbo_dequant_2bit((q >> shift0) & 3, norm);
+    v.y() = turbo_dequant_2bit((q >> shift1) & 3, norm);
+}
+
+static __dpct_inline__ void dequantize_turbo3_0(const void *vx, const int64_t ib,
+                                                const int iqs, dfloat2 &v) {
+    const block_turbo3_0 * x = (const block_turbo3_0 *) vx;
+    const float norm = (const float) x[ib].norm;
+    const int byte = iqs >> 2;
+    const int shift0 = (iqs & 3) * 2;
+    const int shift1 = ((iqs + 1) & 3) * 2;
+    const uint8_t q = x[ib].qs[byte];
+    const uint8_t s0 = (x[ib].signs[iqs >> 3] >> (iqs & 7)) & 1;
+    const uint8_t s1 = (x[ib].signs[(iqs + 1) >> 3] >> ((iqs + 1) & 7)) & 1;
+    v.x() = turbo_dequant_3bit(((q >> shift0) & 3) | (s0 << 2), norm);
+    v.y() = turbo_dequant_3bit(((q >> shift1) & 3) | (s1 << 2), norm);
+}
+
+static __dpct_inline__ void dequantize_turbo4_0(const void *vx, const int64_t ib,
+                                                const int iqs, dfloat2 &v) {
+    const block_turbo4_0 * x = (const block_turbo4_0 *) vx;
+    const float norm = (const float) x[ib].norm;
+    const int byte = iqs >> 1;
+    const uint8_t q = x[ib].qs[byte];
+    v.x() = turbo_dequant_4bit(q & 0xF, norm);
+    v.y() = turbo_dequant_4bit(q >> 4, norm);
 }
 
 template<typename dst_t>
