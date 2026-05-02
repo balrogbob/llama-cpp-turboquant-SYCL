@@ -302,8 +302,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     }
 
     const int k_VKQ_max = KV_max ? KV_max[sequence * item_ct1.get_group_range(2) + item_ct1.get_group(2)] : ne11;
-    const int q_tile_end = sycl::min(n_q, ic0 + ncols);
-    const int k_VKQ_stop = implicit_causal ? sycl::min(k_VKQ_max, kq_prefix + q_tile_end) : k_VKQ_max;
+    const int k_VKQ_stop = implicit_causal ? sycl::min(k_VKQ_max, n_kv_valid) : k_VKQ_max;
     K += item_ct1.get_group(1) * nthreads * nb11;
     V += item_ct1.get_group(1) * nthreads * nb21;
     if (maskh) {
