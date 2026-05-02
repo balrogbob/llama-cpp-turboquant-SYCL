@@ -134,6 +134,8 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     const int n_kv_valid = implicit_causal ? ne31 : 0;
     const int n_q = int(ne01.z());
     const int kq_prefix = implicit_causal ? n_kv_valid - n_q : 0;
+    const int q_tile_first = kq_prefix + ic0;
+    const int q_tile_last = q_tile_first + ((ncols == 1 || ic0 + ncols <= n_q) ? ncols : n_q - ic0) - 1;
     Q += nb03*sequence + nb02* head              + nb01*ic0;
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
@@ -331,9 +333,11 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
                 const int k_idx = k_VKQ_0 + i_KQ;
+                const bool any_valid = !implicit_causal || k_idx <= q_tile_last;
+                const bool all_valid = !implicit_causal || k_idx <= q_tile_first;
                 float sum = -INFINITY;
 
-                if (!implicit_causal || k_idx <= kq_prefix + ic0 + j) {
+                if (any_valid && (all_valid || k_idx <= q_tile_first + j)) {
                     sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
                     sum = warp_reduce_sum<nthreads_KQ>(sum);
 
