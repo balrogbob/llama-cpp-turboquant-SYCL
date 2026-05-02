@@ -68,6 +68,13 @@ struct llama_memory_context_i {
     // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization
     // Returns nullptr when InnerQ is not active. Override in KV cache contexts.
     virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
+
+    // Exact valid KV prefix length for the current ubatch. Returns 0 when not applicable.
+    virtual uint32_t get_n_kv_valid() const { return 0; }
+
+    // True only when the current ubatch/cache state proves that FA can derive KQ masking
+    // from runtime metadata instead of an explicit dense host-built mask.
+    virtual bool get_can_use_implicit_kq_mask() const { return false; }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;
@@ -126,6 +133,28 @@ struct llama_memory_i {
 
     virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const = 0;
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
+
+    // optional support for append-only partial-state deltas
+    virtual bool state_supports_append(llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const {
+        (void) seq_id;
+        (void) flags;
+        return false;
+    }
+
+    virtual size_t state_write_from(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos from_pos) const {
+        (void) io;
+        (void) seq_id;
+        (void) flags;
+        (void) from_pos;
+        return 0;
+    }
+
+    virtual size_t state_read_append(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+        (void) io;
+        (void) seq_id;
+        (void) flags;
+        return 0;
+    }
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

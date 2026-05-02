@@ -8252,10 +8252,16 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     float scale         = 1.0f;
     float max_bias      = 0.0f;
     float logit_softcap = 0.0f;
+    uint32_t n_kv_valid = 0;
 
     memcpy(&scale,         (float *) dst->op_params + 0, sizeof(float));
     memcpy(&max_bias,      (float *) dst->op_params + 1, sizeof(float));
     memcpy(&logit_softcap, (float *) dst->op_params + 2, sizeof(float));
+
+    const bool implicit_causal = ggml_flash_attn_ext_get_implicit_causal(dst, &n_kv_valid);
+    const int64_t kq_prefix = implicit_causal ? (int64_t) n_kv_valid - N : 0;
+
+    GGML_ASSERT(!implicit_causal || (mask == nullptr && n_kv_valid >= (uint32_t) N));
 
     if (logit_softcap != 0) {
         scale /= logit_softcap;
@@ -8318,6 +8324,12 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         // ref: https://arxiv.org/pdf/2112.05682.pdf
 
         for (int64_t ic = ic_start; ic < ic_end; ++ic) {
+            if (implicit_causal) {
+                if ((uint64_t) ic >= n_kv_valid || ic > kq_prefix + iq1) {
+                    continue;
+                }
+            }
+
             const float mv = mp ? slope*GGML_CPU_FP16_TO_FP32(mp[ic]) : 0.0f;
             if (mv == -INFINITY) {
                 continue;

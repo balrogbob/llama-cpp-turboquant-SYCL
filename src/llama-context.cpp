@@ -2150,6 +2150,13 @@ llm_graph_params llama_context::graph_params(
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
                           llm_graph_type   gtype) const {
+    const bool use_implicit_kq_mask =
+        mctx != nullptr &&
+        cparams.flash_attn &&
+        cparams.causal_attn &&
+        model.hparams.f_max_alibi_bias == 0.0f &&
+        mctx->get_can_use_implicit_kq_mask();
+
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
@@ -2163,6 +2170,7 @@ llm_graph_params llama_context::graph_params(
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.samplers    =*/ sampling.samplers,
+        /*.use_implicit_kq_mask =*/ use_implicit_kq_mask,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
@@ -2418,6 +2426,40 @@ size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * sr
         return state_seq_read_data(io, seq_id, flags);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading state: %s\n", __func__, err.what());
+        return 0;
+    }
+}
+
+bool llama_context::state_seq_supports_append(llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    return memory && memory->state_supports_append(seq_id, flags);
+}
+
+size_t llama_context::state_seq_get_size_from_pos(llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos from_pos) {
+    llama_io_write_dummy io;
+    try {
+        return memory ? memory->state_write_from(io, seq_id, flags, from_pos) : 0;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error getting state size: %s\n", __func__, err.what());
+        return 0;
+    }
+}
+
+size_t llama_context::state_seq_get_data_from_pos(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags, llama_pos from_pos) {
+    llama_io_write_buffer io(dst, size);
+    try {
+        return memory ? memory->state_write_from(io, seq_id, flags, from_pos) : 0;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error saving state delta: %s\n", __func__, err.what());
+        return 0;
+    }
+}
+
+size_t llama_context::state_seq_append_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
+    llama_io_read_buffer io(src, size);
+    try {
+        return memory ? memory->state_read_append(io, seq_id, flags) : 0;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error appending state: %s\n", __func__, err.what());
         return 0;
     }
 }
@@ -3436,6 +3478,28 @@ size_t llama_state_seq_set_data_ext(llama_context * ctx, const uint8_t * src, si
     ctx->synchronize();
 
     return ctx->state_seq_set_data(seq_id, src, size, flags);
+}
+
+bool llama_state_seq_supports_append(llama_context * ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    return ctx->state_seq_supports_append(seq_id, flags);
+}
+
+size_t llama_state_seq_get_size_from_pos(llama_context * ctx, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos from_pos) {
+    ctx->synchronize();
+
+    return ctx->state_seq_get_size_from_pos(seq_id, flags, from_pos);
+}
+
+size_t llama_state_seq_get_data_from_pos(llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos from_pos) {
+    ctx->synchronize();
+
+    return ctx->state_seq_get_data_from_pos(seq_id, dst, size, flags, from_pos);
+}
+
+size_t llama_state_seq_append_data(llama_context * ctx, const uint8_t * src, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    ctx->synchronize();
+
+    return ctx->state_seq_append_data(seq_id, src, size, flags);
 }
 
 size_t llama_state_seq_save_file(llama_context * ctx, const char * filepath, llama_seq_id seq_id, const llama_token * tokens, size_t n_token_count) {

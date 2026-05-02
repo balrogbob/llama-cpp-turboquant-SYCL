@@ -142,6 +142,9 @@ public:
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
+    bool state_supports_append(llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+    size_t state_write_from(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos from_pos) const override;
+    size_t state_read_append(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) override;
 
     //
     // llama_kv_cache specific API
@@ -160,6 +163,8 @@ public:
     //
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
+    uint32_t get_n_kv_valid(const slot_info & sinfo) const;
+    bool get_can_use_implicit_kq_mask(const slot_info & sinfo) const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
@@ -315,10 +320,12 @@ private:
         std::vector<std::pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
     };
 
+    cell_ranges_t state_collect_ranges(uint32_t strm, llama_seq_id seq_id, llama_pos from_pos, uint32_t & cell_count) const;
+
     void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const;
 
-    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1);
+    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1, bool replace = true);
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
 };
 
@@ -365,6 +372,8 @@ public:
     //
 
     uint32_t get_n_kv() const;
+    uint32_t get_n_kv_valid() const override;
+    bool get_can_use_implicit_kq_mask() const override;
 
     ggml_type type_k() const;
     ggml_type type_v() const;
@@ -444,4 +453,6 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+    int32_t n_kv_valid = 0;
+    bool can_use_implicit_kq_mask = false;
 };

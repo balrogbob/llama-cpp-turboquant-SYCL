@@ -2407,6 +2407,15 @@ extern "C" {
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);
 
+    GGML_API void ggml_flash_attn_ext_set_implicit_causal(
+            struct ggml_tensor * a,
+            bool                 enabled,
+            uint32_t             n_kv);
+
+    GGML_API bool ggml_flash_attn_ext_get_implicit_causal(
+            const struct ggml_tensor * a,
+            uint32_t                 * n_kv);
+
     GGML_API void ggml_flash_attn_ext_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);

@@ -566,12 +566,23 @@ struct server_task_result_apply_lora : server_task_result {
 };
 
 struct server_prompt_checkpoint {
-    llama_pos pos_min;
-    llama_pos pos_max;
+    llama_pos pos_min = 0;
+    llama_pos pos_max = 0;
 
-    int64_t n_tokens;
+    int64_t n_tokens = 0;
+
+    int64_t anchor_tokens = 0;
+    int64_t prev_tokens = 0;
+
+    uint32_t delta_depth = 0;
+
+    bool is_delta = false;
 
     std::vector<uint8_t> data;
+
+    bool is_full() const {
+        return !is_delta;
+    }
 
     size_t size() const {
         return data.size();
@@ -585,6 +596,10 @@ struct server_prompt_checkpoint {
         pos_min = 0;
         pos_max = 0;
         n_tokens = 0;
+        anchor_tokens = 0;
+        prev_tokens = 0;
+        delta_depth = 0;
+        is_delta = false;
         data.clear();
     }
 };

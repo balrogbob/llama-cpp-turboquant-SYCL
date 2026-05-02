@@ -21,6 +21,7 @@
 #include <exception>
 #include <memory>
 #include <filesystem>
+#include <iterator>
 #include <utility>
 
 // fix problem with std::min and std::max
@@ -35,6 +36,9 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+constexpr uint32_t SERVER_CHECKPOINT_MAX_DELTA_DEPTH = 8;
+
+static constexpr llama_state_seq_flags SERVER_CHECKPOINT_FLAGS = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
 
 static server_prompt_checkpoint server_get_checkpoint(llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1) {
     if (pos_min == -1) {
@@ -47,18 +51,115 @@ static server_prompt_checkpoint server_get_checkpoint(llama_context * ctx, int i
     const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
     auto cur = server_prompt_checkpoint {
-        /*.pos_min  = */ pos_min,
-        /*.pos_max  = */ pos_max,
-        /*.n_tokens = */ n_tokens,
-        /*.data     = */ std::vector<uint8_t>(checkpoint_size),
+        /*.pos_min       = */ pos_min,
+        /*.pos_max       = */ pos_max,
+        /*.n_tokens      = */ n_tokens,
+        /*.anchor_tokens = */ n_tokens,
+        /*.prev_tokens   = */ 0,
+        /*.delta_depth   = */ 0,
+        /*.is_delta      = */ false,
+        /*.data          = */ std::vector<uint8_t>(checkpoint_size),
     };
 
-    const size_t n = llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    const size_t n = llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, id, SERVER_CHECKPOINT_FLAGS);
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
 
     return cur;
+}
+
+static bool server_checkpoint_can_use_delta(
+        llama_context * ctx,
+        int id,
+        int64_t n_tokens,
+        llama_pos pos_min,
+        llama_pos pos_max,
+        bool delta_cache,
+        const server_prompt_checkpoint & prev) {
+    GGML_UNUSED(id);
+
+    return
+        delta_cache &&
+        !prev.empty() &&
+        llama_state_seq_supports_append(ctx, id, SERVER_CHECKPOINT_FLAGS) &&
+        prev.delta_depth < SERVER_CHECKPOINT_MAX_DELTA_DEPTH &&
+        pos_min >= 0 &&
+        pos_max >= 0 &&
+        n_tokens > prev.n_tokens &&
+        pos_min == prev.pos_min &&
+        pos_max > prev.pos_max;
+}
+
+static server_prompt_checkpoint server_get_checkpoint_delta(
+        llama_context * ctx,
+        int id,
+        int64_t n_tokens,
+        const server_prompt_checkpoint & prev,
+        llama_pos pos_min,
+        llama_pos pos_max) {
+    const llama_pos from_pos = prev.pos_max + 1;
+    const size_t checkpoint_size = llama_state_seq_get_size_from_pos(ctx, id, SERVER_CHECKPOINT_FLAGS, from_pos);
+
+    auto cur = server_prompt_checkpoint {
+        /*.pos_min       = */ pos_min,
+        /*.pos_max       = */ pos_max,
+        /*.n_tokens      = */ n_tokens,
+        /*.anchor_tokens = */ prev.is_delta ? prev.anchor_tokens : prev.n_tokens,
+        /*.prev_tokens   = */ prev.n_tokens,
+        /*.delta_depth   = */ prev.delta_depth + 1,
+        /*.is_delta      = */ true,
+        /*.data          = */ std::vector<uint8_t>(checkpoint_size),
+    };
+
+    const size_t n = llama_state_seq_get_data_from_pos(ctx, cur.data.data(), checkpoint_size, id, SERVER_CHECKPOINT_FLAGS, from_pos);
+    if (n != checkpoint_size) {
+        GGML_ABORT("checkpoint delta size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
+    }
+
+    return cur;
+}
+
+static bool server_restore_checkpoint(
+        llama_context * ctx,
+        int id,
+        const std::list<server_prompt_checkpoint> & checkpoints,
+        std::list<server_prompt_checkpoint>::const_iterator it) {
+    if (it->is_full()) {
+        return llama_state_seq_set_data_ext(ctx, it->data.data(), it->size(), id, SERVER_CHECKPOINT_FLAGS) == it->size();
+    }
+
+    const auto anchor = std::find_if(checkpoints.begin(), checkpoints.end(), [&](const server_prompt_checkpoint & cur) {
+        return cur.is_full() && cur.n_tokens == it->anchor_tokens;
+    });
+
+    if (anchor == checkpoints.end()) {
+        return false;
+    }
+
+    if (llama_state_seq_set_data_ext(ctx, anchor->data.data(), anchor->size(), id, SERVER_CHECKPOINT_FLAGS) != anchor->size()) {
+        return false;
+    }
+
+    int64_t prev_tokens = anchor->n_tokens;
+    for (auto cur = std::next(anchor); ; ++cur) {
+        if (cur == checkpoints.end() || cur->n_tokens > it->n_tokens) {
+            return false;
+        }
+
+        if (!cur->is_delta || cur->anchor_tokens != anchor->n_tokens || cur->prev_tokens != prev_tokens) {
+            return false;
+        }
+
+        if (llama_state_seq_append_data(ctx, cur->data.data(), cur->size(), id, SERVER_CHECKPOINT_FLAGS) != cur->size()) {
+            return false;
+        }
+
+        prev_tokens = cur->n_tokens;
+        if (cur == it) {
+            return true;
+        }
+    }
 }
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
@@ -1813,19 +1914,50 @@ private:
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
+            while (!slot.prompt.checkpoints.empty() && slot.prompt.checkpoints.front().is_delta) {
+                const auto & cur = slot.prompt.checkpoints.front();
+                SLT_WRN(slot, "erasing orphaned context checkpoint delta (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                        cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
+                slot.prompt.checkpoints.pop_front();
+            }
+
+            if (slot.prompt.checkpoints.empty()) {
+                break;
+            }
+
             const auto & cur = slot.prompt.checkpoints.front();
-
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+            SLT_WRN(slot, "erasing old context checkpoint%s (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    cur.is_delta ? " delta" : "",
                     cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
+            slot.prompt.checkpoints.pop_front();
 
-            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+            while (!slot.prompt.checkpoints.empty() && slot.prompt.checkpoints.front().is_delta) {
+                const auto & dep = slot.prompt.checkpoints.front();
+                SLT_WRN(slot, "erasing dependent context checkpoint delta (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                        dep.pos_min, dep.pos_max, dep.n_tokens, (float) dep.data.size() / 1024 / 1024);
+                slot.prompt.checkpoints.pop_front();
+            }
         }
 
-        const auto & cur = slot.prompt.checkpoints.emplace_back(server_get_checkpoint(ctx, slot.id, slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max));
+        const int64_t checkpoint_tokens = slot.prompt.n_tokens() - n_tokens_cur;
+
+        server_prompt_checkpoint checkpoint;
+        if (!slot.prompt.checkpoints.empty()) {
+            const auto & prev = slot.prompt.checkpoints.back();
+            if (server_checkpoint_can_use_delta(ctx, slot.id, checkpoint_tokens, pos_min, pos_max, params_base.delta_cache, prev)) {
+                checkpoint = server_get_checkpoint_delta(ctx, slot.id, checkpoint_tokens, prev, pos_min, pos_max);
+            } else {
+                checkpoint = server_get_checkpoint(ctx, slot.id, checkpoint_tokens, pos_min, pos_max);
+            }
+        } else {
+            checkpoint = server_get_checkpoint(ctx, slot.id, checkpoint_tokens, pos_min, pos_max);
+        }
+
+        const auto & cur = slot.prompt.checkpoints.emplace_back(std::move(checkpoint));
 
         SLT_WRN(slot,
-                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                "created context checkpoint%s %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                cur.is_delta ? " delta" : "",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
                 cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
     }
@@ -2475,7 +2607,7 @@ private:
                                     SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
 
                                     // search for a context checkpoint
-                                    const auto it = std::find_if(
+                                    const auto rit = std::find_if(
                                         slot.prompt.checkpoints.rbegin(),
                                         slot.prompt.checkpoints.rend(),
                                         [&, func_name = __func__](const auto & cur) {
@@ -2486,14 +2618,16 @@ private:
                                         }
                                     );
 
-                                    bool do_reset = it == slot.prompt.checkpoints.rend();
+                                    bool do_reset = rit == slot.prompt.checkpoints.rend();
 
                                     if (!do_reset) {
+                                        const auto it = std::prev(rit.base());
+
                                         // restore the context checkpoint
                                         const size_t checkpoint_size = it->data.size();
-                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        const bool restored = server_restore_checkpoint(ctx, slot.id, slot.prompt.checkpoints, it);
 
-                                        if (n != checkpoint_size) {
+                                        if (!restored) {
                                             SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float) checkpoint_size / 1024 / 1024);
                                             do_reset = true;
                                             //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");

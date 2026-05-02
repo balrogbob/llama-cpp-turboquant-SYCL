@@ -1316,6 +1316,33 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     return result;
 }
 
+uint32_t llama_kv_cache::get_n_kv_valid(const slot_info & sinfo) const {
+    uint32_t result = 0;
+
+    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+        const auto & cells = v_cells[sinfo.strm[s]];
+        result = std::max(cells.used_max_p1(), result);
+    }
+
+    return result;
+}
+
+bool llama_kv_cache::get_can_use_implicit_kq_mask(const slot_info & sinfo) const {
+    if (sinfo.empty() || sinfo.n_stream() != 1 || !sinfo.is_contiguous()) {
+        return false;
+    }
+
+    const auto & cells = v_cells[sinfo.strm[0]];
+    const uint32_t n_kv_valid = cells.used_max_p1();
+
+    // Require a true dense prefix with the current ubatch appended at the live tail.
+    if (n_kv_valid == 0 || cells.used_min() != 0 || cells.get_used() != n_kv_valid) {
+        return false;
+    }
+
+    return sinfo.head() + sinfo.size() == n_kv_valid;
+}
+
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
     const int32_t ikv = map_layer_ids.at(il);
 
@@ -2238,50 +2265,53 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
     return gf;
 }
 
+llama_kv_cache::cell_ranges_t llama_kv_cache::state_collect_ranges(uint32_t strm, llama_seq_id seq_id, llama_pos from_pos, uint32_t & cell_count) const {
+    cell_ranges_t cr { strm, {} };
+
+    cell_count = 0;
+
+    const auto & cells = v_cells[strm];
+    uint32_t cell_range_begin = cells.size();
+
+    for (uint32_t i = 0; i < cells.size(); ++i) {
+        const bool matches_seq = !cells.is_empty(i) && (seq_id == -1 || cells.seq_has(i, seq_id));
+        const bool matches_pos = from_pos < 0 || cells.pos_get(i) >= from_pos;
+
+        if (matches_seq && matches_pos) {
+            ++cell_count;
+            if (cell_range_begin == cells.size()) {
+                cell_range_begin = i;
+            }
+        } else if (cell_range_begin != cells.size()) {
+            cr.data.emplace_back(cell_range_begin, i);
+            cell_range_begin = cells.size();
+        }
+    }
+
+    if (cell_range_begin != cells.size()) {
+        cr.data.emplace_back(cell_range_begin, cells.size());
+    }
+
+    uint32_t cell_count_check = 0;
+    for (const auto & range : cr.data) {
+        cell_count_check += range.second - range.first;
+    }
+    GGML_ASSERT(cell_count == cell_count_check);
+
+    return cr;
+}
+
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
-        cell_ranges_t cr { s, {} };
-
         uint32_t cell_count = 0;
-
-        const auto & cells = v_cells[s];
-
-        // Count the number of cells with the specified seq_id
-        // Find all the ranges of cells with this seq id (or all, when -1)
-        uint32_t cell_range_begin = cells.size();
-
-        for (uint32_t i = 0; i < cells.size(); ++i) {
-            if (!cells.is_empty(i) && (seq_id == -1 || cells.seq_has(i, seq_id))) {
-                ++cell_count;
-                if (cell_range_begin == cells.size()) {
-                    cell_range_begin = i;
-                }
-            } else {
-                if (cell_range_begin != cells.size()) {
-                    cr.data.emplace_back(cell_range_begin, i);
-                    cell_range_begin = cells.size();
-                }
-            }
-        }
-
-        if (cell_range_begin != cells.size()) {
-            cr.data.emplace_back(cell_range_begin, cells.size());
-        }
-
-        // DEBUG CHECK: Sum of cell counts in ranges should equal the total cell count
-        uint32_t cell_count_check = 0;
-        for (const auto & range : cr.data) {
-            cell_count_check += range.second - range.first;
-        }
-        GGML_ASSERT(cell_count == cell_count_check);
+        const cell_ranges_t cr = state_collect_ranges(s, seq_id, -1, cell_count);
 
         io.write(&cell_count, sizeof(cell_count));
 
-        // skip empty streams
         if (cell_count == 0) {
             continue;
         }
@@ -2289,6 +2319,36 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
         state_write_meta(io, cr, seq_id);
         state_write_data(io, cr);
     }
+}
+
+bool llama_kv_cache::state_supports_append(llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    return seq_id >= 0 && (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) != 0 && hparams.n_pos_per_embd() == 1;
+}
+
+size_t llama_kv_cache::state_write_from(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos from_pos) const {
+    GGML_UNUSED(flags);
+
+    if (!state_supports_append(seq_id, flags)) {
+        return 0;
+    }
+
+    io.write(&n_stream, sizeof(n_stream));
+
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        uint32_t cell_count = 0;
+        const cell_ranges_t cr = state_collect_ranges(s, seq_id, from_pos, cell_count);
+
+        io.write(&cell_count, sizeof(cell_count));
+
+        if (cell_count == 0) {
+            continue;
+        }
+
+        state_write_meta(io, cr, seq_id);
+        state_write_data(io, cr);
+    }
+
+    return io.n_bytes();
 }
 
 void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
@@ -2327,6 +2387,44 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
             throw std::runtime_error("failed to restore kv cache");
         }
     }
+}
+
+size_t llama_kv_cache::state_read_append(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
+    if (!state_supports_append(seq_id, flags)) {
+        return 0;
+    }
+
+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+
+    uint32_t n_stream_cur;
+    io.read_to(&n_stream_cur, sizeof(n_stream_cur));
+    if (n_stream_cur != n_stream) {
+        throw std::runtime_error("n_stream mismatch");
+    }
+
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        uint32_t cell_count;
+        io.read_to(&cell_count, sizeof(cell_count));
+
+        if (cell_count == 0) {
+            continue;
+        }
+
+        const uint32_t strm = seq_to_stream[seq_id];
+        slot_info sinfo;
+
+        bool res = true;
+        res = res && state_read_meta(io, strm, cell_count, sinfo, seq_id, false);
+        res = res && state_read_data(io, strm, cell_count, sinfo);
+
+        if (!res) {
+            throw std::runtime_error("failed to append kv cache state");
+        }
+    }
+
+    return io.n_bytes();
 }
 
 void llama_kv_cache::state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id) const {
@@ -2463,13 +2561,15 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
     }
 }
 
-bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, slot_info & sinfo, llama_seq_id dest_seq_id) {
+bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, slot_info & sinfo, llama_seq_id dest_seq_id, bool replace) {
     auto & cells = v_cells[strm];
     auto & head  = v_heads[strm];
 
     if (dest_seq_id != -1) {
         // single sequence
-        seq_rm(dest_seq_id, -1, -1);
+        if (replace) {
+            seq_rm(dest_seq_id, -1, -1);
+        }
 
         llama_batch_allocr balloc(hparams.n_pos_per_embd());
 
@@ -2813,11 +2913,17 @@ bool llama_kv_cache_context::apply() {
     if (ubatches.empty()) {
         kv->update(lctx, do_shift, sc_info);
 
+        n_kv = 0;
+        n_kv_valid = 0;
+        can_use_implicit_kq_mask = false;
+
         return true;
     }
 
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
+    n_kv_valid = kv->get_n_kv_valid(sinfos[i_cur]);
+    can_use_implicit_kq_mask = ubatches[i_cur].equal_seqs() && kv->get_can_use_implicit_kq_mask(sinfos[i_cur]);
 
     // InnerQ: check if CUDA calibration finalized and tensor needs update
     if (kv->get_turbo_innerq_scale_inv() != nullptr && turbo_innerq_needs_tensor_update()) {
@@ -2844,6 +2950,14 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 
 uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
+}
+
+uint32_t llama_kv_cache_context::get_n_kv_valid() const {
+    return n_kv_valid;
+}
+
+bool llama_kv_cache_context::get_can_use_implicit_kq_mask() const {
+    return can_use_implicit_kq_mask;
 }
 
 ggml_type llama_kv_cache_context::type_k() const {

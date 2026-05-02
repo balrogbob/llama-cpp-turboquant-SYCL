@@ -5387,6 +5387,9 @@ struct ggml_tensor * ggml_flash_attn_ext(
 
     float params[] = { scale, max_bias, logit_softcap };
     ggml_set_op_params(result, params, sizeof(params));
+    ggml_set_op_params_i32(result, 3, GGML_PREC_DEFAULT);
+    ggml_set_op_params_i32(result, 4, 0);
+    ggml_set_op_params_i32(result, 5, 0);
 
     result->op     = GGML_OP_FLASH_ATTN_EXT;
     result->src[0] = q;
@@ -5414,6 +5417,30 @@ enum ggml_prec ggml_flash_attn_ext_get_prec(
     const int32_t prec_i32 = ggml_get_op_params_i32(a, 3);
 
     return (enum ggml_prec) prec_i32;
+}
+
+void ggml_flash_attn_ext_set_implicit_causal(
+        struct ggml_tensor * a,
+        bool                 enabled,
+        uint32_t             n_kv) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    ggml_set_op_params_i32(a, 4, enabled ? 1 : 0);
+    ggml_set_op_params_i32(a, 5, enabled ? (int32_t) n_kv : 0);
+}
+
+bool ggml_flash_attn_ext_get_implicit_causal(
+        const struct ggml_tensor * a,
+        uint32_t                 * n_kv) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    const bool enabled = ggml_get_op_params_i32(a, 4) != 0;
+
+    if (n_kv != NULL) {
+        *n_kv = enabled ? (uint32_t) ggml_get_op_params_i32(a, 5) : 0;
+    }
+
+    return enabled;
 }
 
 void ggml_flash_attn_ext_add_sinks(

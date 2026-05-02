@@ -130,11 +130,15 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     const int sequence  = item_ct1.get_group(0) / ne02;
     const int head      = item_ct1.get_group(0) - sequence * ne02;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
+    const bool implicit_causal = mask == nullptr && nb31 < 0;
+    const int n_kv_valid = implicit_causal ? ne31 : 0;
+    const int n_q = int(ne01.z());
+    const int kq_prefix = implicit_causal ? n_kv_valid - n_q : 0;
     Q += nb03*sequence + nb02* head              + nb01*ic0;
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
 
-    const sycl::half * maskh = (const sycl::half *) (mask + nb33 * (sequence % ne33) + nb31 * ic0);
+    const sycl::half * maskh = mask ? (const sycl::half *) (mask + nb33 * (sequence % ne33) + nb31 * ic0) : nullptr;
 
     const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
@@ -298,14 +302,17 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     }
 
     const int k_VKQ_max = KV_max ? KV_max[sequence * item_ct1.get_group_range(2) + item_ct1.get_group(2)] : ne11;
+    const int k_VKQ_stop = implicit_causal ? sycl::min(k_VKQ_max, n_kv_valid) : k_VKQ_max;
     K += item_ct1.get_group(1) * nthreads * nb11;
     V += item_ct1.get_group(1) * nthreads * nb21;
-    maskh += item_ct1.get_group(1) * nthreads;
-    for (int k_VKQ_0 = item_ct1.get_group(1) * nthreads; k_VKQ_0 < k_VKQ_max;
+    if (maskh) {
+        maskh += item_ct1.get_group(1) * nthreads;
+    }
+    for (int k_VKQ_0 = item_ct1.get_group(1) * nthreads; k_VKQ_0 < k_VKQ_stop;
          k_VKQ_0 += item_ct1.get_group_range(1) * nthreads,
-             // Increment pointers after each loop:
+              // Increment pointers after each loop:
          K += item_ct1.get_group_range(1) * nthreads * nb11, V += item_ct1.get_group_range(1) * nthreads * nb21,
-             maskh += item_ct1.get_group_range(1) * nthreads) {
+             maskh += maskh ? item_ct1.get_group_range(1) * nthreads : 0) {
         // Calculate KQ tile and keep track of new maximum KQ values:
         float KQ_reg[ncols]={}; // KQ in registers.
         float KQ_max_new[ncols]={};
@@ -323,15 +330,20 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
-                float sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
-                sum = warp_reduce_sum<nthreads_KQ>(sum);
+                const int k_idx = k_VKQ_0 + i_KQ;
+                float sum = -INFINITY;
 
-                if (use_logit_softcap) {
-                    sum = logit_softcap * sycl::tanh(sum);
-                }
-                if (mask) {
-                    sum += slope * sycl::vec<sycl::half, 1>(maskh[j * ne11 + i_KQ])
-                                       .convert<float, sycl::rounding_mode::automatic>()[0];
+                if (!implicit_causal || k_idx <= kq_prefix + ic0 + j) {
+                    sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                    sum = warp_reduce_sum<nthreads_KQ>(sum);
+
+                    if (use_logit_softcap) {
+                        sum = logit_softcap * sycl::tanh(sum);
+                    }
+                    if (mask) {
+                        sum += slope * sycl::vec<sycl::half, 1>(maskh[j * ne11 + i_KQ])
+                                           .convert<float, sycl::rounding_mode::automatic>()[0];
+                    }
                 }
 
                 KQ_max_new[j] = sycl::fmax((float) KQ_max_new[j], sum);

@@ -887,6 +887,32 @@ extern "C" {
                     llama_seq_id   dest_seq_id,
            llama_state_seq_flags   flags);
 
+    LLAMA_API bool llama_state_seq_supports_append(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id,
+           llama_state_seq_flags   flags);
+
+    LLAMA_API size_t llama_state_seq_get_size_from_pos(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id,
+           llama_state_seq_flags   flags,
+                       llama_pos   from_pos);
+
+    LLAMA_API size_t llama_state_seq_get_data_from_pos(
+            struct llama_context * ctx,
+                         uint8_t * dst,
+                          size_t   size,
+                    llama_seq_id   seq_id,
+           llama_state_seq_flags   flags,
+                      llama_pos   from_pos);
+
+    LLAMA_API size_t llama_state_seq_append_data(
+            struct llama_context * ctx,
+                   const uint8_t * src,
+                          size_t   size,
+                    llama_seq_id   dest_seq_id,
+           llama_state_seq_flags   flags);
+
     //
     // Decoding
     //
