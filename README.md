@@ -23,7 +23,7 @@ LLM inference in C/C++
 - **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - Checkpoint Delta is tested working without issue with qwen3.6-35B-A3B. (All changes here are specifically targeted at Intel ARC A770 and qwen3.6. YMMV with non qwen 3/3.5/3.6 models (qwen3 models, including qwen3 coder next, confirmed working with delta checkpoints.) use --delta-cache to activate.
-- ***Recommended flags for using TurboQuant with Intel ARC and Xe integrated graphics: "-ctv turbo3 -ctk turbo3 --no-op-offload --delta-cache --no-host --mlock -np --no-mmap -fa on"***
+- ***Recommended flags for using TurboQuant with Intel ARC and Xe integrated graphics: "-ctv turbo3 -ctk turbo3 --no-op-offload --delta-cache --no-host --mlock -np 1 --no-mmap -fa on"***
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
 - Support for the `gpt-oss` model with native MXFP4 format has been added | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [Collaboration with NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [Comment](https://github.com/ggml-org/llama.cpp/discussions/15095)
