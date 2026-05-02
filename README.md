@@ -18,8 +18,12 @@ LLM inference in C/C++
 ## Hot topics
 
 - **SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow.**
+- **Added Delta checkpoints, for a moderate prompt cache ram savings and reduced memcopy on intel. Limited gains on other backends, aside from the lower ram usage for prompt cache.**
+- **IMPORTANT SYCL NOTE - When using turbo quants and partial offloading, always use --no-op-offload! Turbo pads all batches to a pre-determined size, triggering the offload op unconditionally, pulling massive layeres back and forth rapidly across the PCIE bus! I am crafting a new control surface to allow offloaded ops in early, low context, and back them off as context grows to prevent ram swap contention, giving nice, enhanced speed early prompting with a lower floor to the speed, rather than letting it degrade to unusability after 40-50k context. New system, new issues, and all the SYCL kernels here are new and only tested by me!**
 - **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
+- Checkpoint Delta is tested working without issue with qwen3.6-35B-A3B. (All changes here are specifically targeted at Intel ARC A770 and qwen3.6. YMMV with non qwen 3/3.5/3.6 models (qwen3 models, including qwen3 coder next, confirmed working with delta checkpoints.) use --delta-cache to activate.
+- ***Recommended flags for using TurboQuant with Intel ARC and Xe integrated graphics: "-ctv turbo3 -ctk turbo3 --no-op-offload --delta-cache --no-host --mlock -np 1 --no-mmap -fa on"***
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
 - Support for the `gpt-oss` model with native MXFP4 format has been added | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [Collaboration with NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [Comment](https://github.com/ggml-org/llama.cpp/discussions/15095)
