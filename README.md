@@ -18,6 +18,7 @@ LLM inference in C/C++
 ## Hot topics
 
 - **SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow.**
+- **IMPORTANT SYCL NOTE - When using turbo quants and partial offloading, always use --no-op-offload! Turbo pads all batches to a pre-determined size, triggering the offload op unconditionally, pulling massive layeres back and forth rapidly across the PCIE bus! I am crafting a new control surface to allow offloaded ops in early, low context, and back them off as context grows to prevent ram swap contention, giving nice, enhanced speed early prompting with a lower floor to the speed, rather than letting it degrade to unusability after 40-50k context. New system, new issues, and all the SYCL kernels here are new and only tested by me!**
 - **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
