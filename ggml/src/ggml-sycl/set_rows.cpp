@@ -208,11 +208,11 @@ static void set_rows_sycl_turbo(
 
         turbo_rotate_forward(buf);
 
-        const int blocks_per_group = group_size / qk;
+        constexpr int blocks_per_group = group_size / qk;
+        block_t blocks_local[blocks_per_group] = {};
         float recon_sq = 0.0f;
         for (int b = 0; b < blocks_per_group; ++b) {
-            block_t * out = blk + b;
-            std::memset(out, 0, sizeof(block_t));
+            block_t * out = &blocks_local[b];
             for (int j = 0; j < qk; ++j) {
                 const uint8_t idx = nearest_centroid(buf[b * qk + j]);
                 if constexpr (std::is_same_v<block_t, block_turbo3_0>) {
@@ -232,10 +232,11 @@ static void set_rows_sycl_turbo(
         const float recon_norm = sycl::sqrt(recon_sq);
         const float corrected_norm = recon_norm > 1e-10f ? grp_norm / recon_norm : grp_norm;
         for (int b = 0; b < blocks_per_group; ++b) {
-            blk[b].norm = corrected_norm;
+            blocks_local[b].norm = corrected_norm;
             if constexpr (std::is_same_v<block_t, block_turbo4_0> && TURBO4_USE_4BIT) {
-                blk[b].rnorm = 0;
+                blocks_local[b].rnorm = 0;
             }
+            blk[b] = blocks_local[b];
         }
     });
 }
