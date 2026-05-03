@@ -1,0 +1,4 @@
+set GGML_OP_OFFLOAD_MIN_BATCH=1024
+echo GGML_OP_OFFLOAD_MIN_BATCH is %GGML_OP_OFFLOAD_MIN_BATCH%
+echo "This is the exact config that works the best on my Intel ARC A770m 16GB. should work for any 16GB card with this repo's fork of the Vulkan backend. 25TPS generation, 80-120 TPS processing"
+llama-server.exe -t 12 -c 262144 -b 2048 -ub 512 -ngl 999 -m Qwen3.6-35B-A3B-Q5_K_M-00001-of-00002.gguf --temp 0.6 --top-k 20 --top-p 0.95 --presence-penalty 0 --mmproj mmproj-Qwen3.6-35B-A3B-F32.gguf --mmproj-auto --host 0.0.0.0 --port 1234 -to 6000 --image-min-tokens 1024 -fit off -ctv turbo4 -ctk turbo4 -np 1 --mlock --mmap -fa on --device Vulkan0 --perf --delta-cache -ot "blk\.(0|1|2|3|4|5|6|7|8|9|11|13|15|17|19)\.=Vulkan0,exps=CPU"
