@@ -910,6 +910,7 @@ private:
             mtmd_context_params mparams = mtmd_context_params_default();
 
             mparams.use_gpu          = params_base.mmproj_use_gpu;
+            mparams.backend_device   = params_base.devices.empty() ? nullptr : ggml_backend_dev_name(params_base.devices.front());
             mparams.print_timings    = false;
             mparams.n_threads        = params_base.cpuparams.n_threads;
             mparams.flash_attn_type  = params_base.flash_attn_type;
