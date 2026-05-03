@@ -18,6 +18,7 @@ Universal LLM inference in C/C++
 ## Hot topics
 
 - **Vulkan and SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow. Make sure to specify --device SYCL0 or --device Vulkan0 or the model may try to load via both backends! mmproj will always load via sycl, this seems to work better anyway.**
+- ***Qwen3.5/3.6 generation fixed in Vulkan backed! MUST USE --mmap! the fix only works on mmapped models! Slight performance hit when offloaded for useful output, small price to pay!***
 - **Added Delta checkpoints, for a moderate prompt cache ram savings and reduced memcopy on intel. Not fully tested with Vulkan. Limited gains on other backends, aside from the lower ram usage for prompt cache.**
 - **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
