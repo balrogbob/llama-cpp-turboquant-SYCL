@@ -5,7 +5,7 @@
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #include "types.glsl"
 
-#if defined(SET_ROWS) && defined(DATA_A_TURBO3_0)
+#if defined(SET_ROWS) && (defined(DATA_A_TURBO2_0) || defined(DATA_A_TURBO3_0) || defined(DATA_A_TURBO4_0))
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 const uint BLOCK_SIZE = 128;
 #elif defined(SET_ROWS) && QUANT_K == 1
@@ -214,7 +214,7 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
-#if defined(DATA_A_TURBO3_0)
+#if defined(SET_ROWS) && (defined(DATA_A_TURBO2_0) || defined(DATA_A_TURBO3_0) || defined(DATA_A_TURBO4_0))
 const float TS1[128] = float[128](
     -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
      1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
@@ -238,7 +238,40 @@ const float TS2[128] = float[128](
 );
 
 const float TINV = 0.08838834764831845;  // 1 / sqrt(128)
+#endif
 
+#if defined(DATA_A_TURBO2_0)
+const float T2C[4] = float[4](
+    -0.133462, -0.039994, 0.039994, 0.133462
+);
+
+const float T2M[3] = float[3](
+    -0.086728, 0.0, 0.086728
+);
+
+#if defined(SET_ROWS)
+
+shared float wht[128];
+shared float sg_acc[16];
+shared float gnrm;
+
+void quantize_block(uint b, uint o) {
+    [[unroll]] for (int j = 0; j < 32; ++j) data_q[b].qs[j] = uint8_t(0);
+    float rs = 0.0;
+    [[unroll]] for (int j = 0; j < 128; ++j) {
+        float v = wht[o + j];
+        uint i = v < T2M[0] ? 0u : v < T2M[1] ? 1u : v < T2M[2] ? 2u : 3u;
+        rs += T2C[i] * T2C[i];
+        data_q[b].qs[j / 4] |= uint8_t(i << ((j % 4) * 2));
+    }
+    float rn = sqrt(rs);
+    data_q[b].norm = float16_t((rn > 1e-10) ? (gnrm / rn) : gnrm);
+}
+
+#endif // defined(SET_ROWS)
+#endif // defined(DATA_A_TURBO2_0)
+
+#if defined(DATA_A_TURBO3_0)
 const float TC[8] = float[8](
     -0.190685, -0.117832, -0.065717, -0.021460,
      0.021460,  0.065717,  0.117832,  0.190685
@@ -276,6 +309,48 @@ void quantize_block(uint b, uint o) {
 
 #endif // defined(SET_ROWS)
 #endif // defined(DATA_A_TURBO3_0)
+
+#if defined(DATA_A_TURBO4_0)
+const float T4C[16] = float[16](
+    -0.173926, -0.117195, -0.089527, -0.068756,
+    -0.051262, -0.035597, -0.020989, -0.006938,
+     0.006938,  0.020989,  0.035597,  0.051262,
+     0.068756,  0.089527,  0.117195,  0.173926
+);
+
+const float T4M[15] = float[15](
+    -0.145561, -0.103361, -0.079142, -0.060009,
+    -0.043430, -0.028293, -0.013964,  0.000000,
+     0.013964,  0.028293,  0.043430,  0.060009,
+     0.079142,  0.103361,  0.145561
+);
+
+#if defined(SET_ROWS)
+
+shared float wht[128];
+shared float sg_acc[16];
+shared float gnrm;
+
+void quantize_block(uint b, uint o) {
+    [[unroll]] for (int j = 0; j < 64; ++j) data_q[b].qs[j] = uint8_t(0);
+    float rs = 0.0;
+    [[unroll]] for (int j = 0; j < 128; ++j) {
+        float v = wht[o + j];
+        uint i =
+            v < T4M[0]  ? 0u  : v < T4M[1]  ? 1u  : v < T4M[2]  ? 2u  : v < T4M[3]  ? 3u :
+            v < T4M[4]  ? 4u  : v < T4M[5]  ? 5u  : v < T4M[6]  ? 6u  : v < T4M[7]  ? 7u :
+            v < T4M[8]  ? 8u  : v < T4M[9]  ? 9u  : v < T4M[10] ? 10u : v < T4M[11] ? 11u :
+            v < T4M[12] ? 12u : v < T4M[13] ? 13u : v < T4M[14] ? 14u : 15u;
+        rs += T4C[i] * T4C[i];
+        data_q[b].qs[j / 2] |= uint8_t(i << ((j & 1u) * 4u));
+    }
+    float rn = sqrt(rs);
+    data_q[b].norm = float16_t((rn > 1e-10) ? (gnrm / rn) : gnrm);
+    data_q[b].rnorm = float16_t(0.0);
+}
+
+#endif // defined(SET_ROWS)
+#endif // defined(DATA_A_TURBO4_0)
 
 #if defined(DATA_A_TQ4_1S)
 
@@ -379,7 +454,7 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
-#if defined(SET_ROWS) && defined(DATA_A_TURBO3_0)
+#if defined(SET_ROWS) && (defined(DATA_A_TURBO2_0) || defined(DATA_A_TURBO3_0) || defined(DATA_A_TURBO4_0))
 void main() {
     const uint t   = gl_LocalInvocationID.x;
     const uint g   = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
@@ -432,7 +507,11 @@ void main() {
     }
 
     // Step 5: apply signs2 + scaling
-    float rv = wht[t] * TINV * TS2[t];
+    wht[t] = wht[t] * TINV * TS2[t];
+    barrier();
+
+#if defined(DATA_A_TURBO3_0)
+    float rv = wht[t];
 
     // Step 6: quantize -- all 128 threads participate
     uint idx = rv < TM[0] ? 0u : rv < TM[1] ? 1u : rv < TM[2] ? 2u : rv < TM[3] ? 3u :
@@ -451,15 +530,11 @@ void main() {
     }
 
     // Pack signs: 8 elements per byte via subgroup ballot
-    // subgroupBallot returns a uvec4 (128 bits); index the correct u32 word for
-    // lanes past 32 so this works at any implementation subgroup size in [8,128].
-    // On RADV RDNA3 the default compute subgroup size is 64, so half the signs
-    // bytes come from ballot.y; using only ballot.x silently corrupts them.
     uvec4 ballot = subgroupBallot(((idx >> 2u) & 1u) != 0u);
     if (sg_lane % 8u == 0u) {
-        uint local_byte  = sg_lane / 8u;            // 0 .. subgroup_size/8 - 1
-        uint word        = local_byte >> 2u;        // which uvec4 component
-        uint bit_offset  = (local_byte & 3u) * 8u;  // byte offset within that u32
+        uint local_byte  = sg_lane / 8u;
+        uint word        = local_byte >> 2u;
+        uint bit_offset  = (local_byte & 3u) * 8u;
         data_q[db].signs[t / 8u] = uint8_t((ballot[word] >> bit_offset) & 0xFFu);
     }
 
@@ -474,6 +549,11 @@ void main() {
         float rn = sqrt(total);
         data_q[db].norm = float16_t((rn > 1e-10) ? (gnrm / rn) : gnrm);
     }
+#else
+    if (t == 0u) {
+        quantize_block(db, 0u);
+    }
+#endif
 }
 #elif defined(SET_ROWS) && defined(DATA_A_TQ4_1S)
 

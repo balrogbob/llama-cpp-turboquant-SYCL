@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 #include "common.hpp"
+#include "dequantize.hpp"
 #include "quants.hpp"
 #include "vecdotq.hpp"
 
@@ -631,6 +632,77 @@ static void mul_mat_vec_nvfp4_q8_1_sycl(const void * vx, const void * vy, float 
     }
 }
 
+template <int qk, typename block_t, void (*dequantize_fn)(const void *, const int64_t, const int, dfloat2 &)>
+static void mul_mat_vec_turbo_q8_1(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
+                                   const int ncols, const int nrows, const sycl::nd_item<3> & item_ct1) {
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+
+    if (row >= nrows) {
+        return;
+    }
+
+    const int blocks_per_row = ncols / qk;
+    float tmp = 0.0f;
+
+    const block_t * x = (const block_t *) vx;
+    const block_q8_1 * y = (const block_q8_1 *) vy;
+
+    for (int i = item_ct1.get_local_id(2); i < blocks_per_row * QI8_1; i += WARP_SIZE) {
+        const int ibx = row * blocks_per_row + i / QI8_1;
+        const int iby = i / QI8_1;
+        const int iqs = (i % QI8_1) * 2;
+
+        dfloat2 v;
+        dequantize_fn(x, ibx, iqs, v);
+
+        const int q = get_int_from_int8_aligned(y[iby].qs, i % QI8_1);
+        tmp += v.x() * float((q << 24) >> 24);
+        tmp += v.y() * float((q << 16) >> 24);
+    }
+
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        float sum = 0.0f;
+        for (int i = 0; i < blocks_per_row; ++i) {
+            sum += ((const block_t *) vx)[row * blocks_per_row + i].norm * ((const block_q8_1 *) vy)[i].ds[1];
+        }
+        dst[row] = tmp + sum;
+    }
+}
+
+template <int qk, typename block_t, void (*dequantize_fn)(const void *, const int64_t, const int, dfloat2 &)>
+static void launch_mul_mat_vec_turbo_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                               const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % qk == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->parallel_for(
+        sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            mul_mat_vec_turbo_q8_1<qk, block_t, dequantize_fn>(vx, vy, dst, ncols, nrows, item_ct1);
+        });
+}
+
+static void mul_mat_vec_turbo2_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                           const int nrows, dpct::queue_ptr stream) {
+    launch_mul_mat_vec_turbo_q8_1_sycl<QK_TURBO2, block_turbo2_0, dequantize_turbo2_0>(vx, vy, dst, ncols, nrows, stream);
+}
+
+static void mul_mat_vec_turbo3_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                           const int nrows, dpct::queue_ptr stream) {
+    launch_mul_mat_vec_turbo_q8_1_sycl<QK_TURBO3, block_turbo3_0, dequantize_turbo3_0>(vx, vy, dst, ncols, nrows, stream);
+}
+
+static void mul_mat_vec_turbo4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                           const int nrows, dpct::queue_ptr stream) {
+    launch_mul_mat_vec_turbo_q8_1_sycl<QK_TURBO4, block_turbo4_0, dequantize_turbo4_0>(vx, vy, dst, ncols, nrows, stream);
+}
+
 static void mul_mat_vec_q5_0_q8_1_sycl(const void *vx, const void *vy,
                                        float *dst, const int ncols,
                                        const int nrows,
@@ -1127,6 +1199,15 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 } else {
                     mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 }
+                break;
+            case GGML_TYPE_TURBO2_0:
+                mul_mat_vec_turbo2_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                break;
+            case GGML_TYPE_TURBO3_0:
+                mul_mat_vec_turbo3_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                break;
+            case GGML_TYPE_TURBO4_0:
+                mul_mat_vec_turbo4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q2_K:
                 mul_mat_vec_q2_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);

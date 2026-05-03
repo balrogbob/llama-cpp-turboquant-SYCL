@@ -2308,10 +2308,12 @@ ggml_tensor * llm_graph_context::build_attn(
     if (inp->self_k_rot) {
         q_cur = ggml_mul_mat_aux(ctx0, q_cur, inp->self_k_rot);
         k_cur = ggml_mul_mat_aux(ctx0, k_cur, inp->self_k_rot);
+        cb(k_cur, "Kcur", il);
     }
 
     if (inp->self_v_rot) {
         v_cur = ggml_mul_mat_aux(ctx0, v_cur, inp->self_v_rot);
+        cb(v_cur, "Vcur", il);
     }
 
     // these nodes are added to the graph together so that they are not reordered
@@ -2541,11 +2543,13 @@ ggml_tensor * llm_graph_context::build_attn(
         q_cur = ggml_mul_mat_aux(ctx0, q_cur, k_rot);
         if (k_cur) {
             k_cur = ggml_mul_mat_aux(ctx0, k_cur, k_rot);
+            cb(k_cur, "Kcur", il);
         }
     }
     if (v_rot) {
         if (v_cur) {
             v_cur = ggml_mul_mat_aux(ctx0, v_cur, v_rot);
+            cb(v_cur, "Vcur", il);
         }
     }
 

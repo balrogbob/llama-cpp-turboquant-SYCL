@@ -7999,10 +7999,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
             }
             if (use_mlock && ggml_backend_buffer_is_host(buf)) {
-                pimpl->mlock_bufs.emplace_back(new llama_mlock);
-                auto & mlock_buf = pimpl->mlock_bufs.back();
-                mlock_buf->init   (ggml_backend_buffer_get_base(buf));
-                mlock_buf->grow_to(ggml_backend_buffer_get_size(buf));
+                void * base = ggml_backend_buffer_get_base(buf);
+                if (base != nullptr) {
+                    pimpl->mlock_bufs.emplace_back(new llama_mlock);
+                    auto & mlock_buf = pimpl->mlock_bufs.back();
+                    mlock_buf->init   (base);
+                    mlock_buf->grow_to(ggml_backend_buffer_get_size(buf));
+                } else {
+                    LLAMA_LOG_WARN("%s: skipping mlock for host buffer %s with no base pointer\n",
+                            __func__, ggml_backend_buft_name(buft));
+                }
             }
             bufs.emplace_back(buf);
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {

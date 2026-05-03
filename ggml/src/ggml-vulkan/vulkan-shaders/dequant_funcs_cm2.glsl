@@ -715,6 +715,24 @@ float16_t dequantFuncNVFP4(const in decodeBufNVFP4 bl, const in uint blockCoords
 }
 #endif
 
+#if defined(DATA_A_TURBO2_0)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTURBO2_0 {
+   block_turbo2_0 block;
+};
+
+float16_t dequantFuncTURBO2_0(const in decodeBufTURBO2_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float centroids[4] = float[4](
+        -0.133462, -0.039994, 0.039994, 0.133462
+    );
+    const float norm = float(bl.block.norm);
+    const uint j = coordInBlock[1];
+    const uint idx = (uint(bl.block.qs[j / 4]) >> ((j % 4) * 2)) & 0x3;
+
+    return float16_t(centroids[idx] * norm);
+}
+#endif
+
 #if defined(DATA_A_TURBO3_0)
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTURBO3_0 {
    block_turbo3_0 block;
@@ -737,6 +755,27 @@ float16_t dequantFuncTURBO3_0(const in decodeBufTURBO3_0 bl, const in uint block
 
     // Combine to 3-bit index
     const uint idx = low2 | (hi1 << 2);
+
+    return float16_t(centroids[idx] * norm);
+}
+#endif
+
+#if defined(DATA_A_TURBO4_0)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTURBO4_0 {
+   block_turbo4_0 block;
+};
+
+float16_t dequantFuncTURBO4_0(const in decodeBufTURBO4_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float centroids[16] = float[16](
+        -0.173926, -0.117195, -0.089527, -0.068756,
+        -0.051262, -0.035597, -0.020989, -0.006938,
+         0.006938,  0.020989,  0.035597,  0.051262,
+         0.068756,  0.089527,  0.117195,  0.173926
+    );
+    const float norm = float(bl.block.norm);
+    const uint j = coordInBlock[1];
+    const uint idx = (uint(bl.block.qs[j / 2]) >> ((j & 1) * 4)) & 0xF;
 
     return float16_t(centroids[idx] * norm);
 }
@@ -790,8 +829,12 @@ float16_t dequantFuncTURBO3_0(const in decodeBufTURBO3_0 bl, const in uint block
 #define dequantFuncA dequantFuncMXFP4
 #elif defined(DATA_A_NVFP4)
 #define dequantFuncA dequantFuncNVFP4
+#elif defined(DATA_A_TURBO2_0)
+#define dequantFuncA dequantFuncTURBO2_0
 #elif defined(DATA_A_TURBO3_0)
 #define dequantFuncA dequantFuncTURBO3_0
+#elif defined(DATA_A_TURBO4_0)
+#define dequantFuncA dequantFuncTURBO4_0
 #elif defined(DATA_A_F32)
 #define dequantFuncA dequantFuncF32
 #endif

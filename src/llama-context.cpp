@@ -165,6 +165,9 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
+    this->type_k = params.type_k;
+    this->type_v = params.type_v;
+
     // initialized later
     cparams.pipeline_parallel = false;
 
@@ -2214,6 +2217,15 @@ llm_graph_cb llama_context::graph_get_cb() const {
             ggml_set_name(cur, name);
         }
 
+        auto assign_first_accel_backend = [&]() {
+            for (const auto & backend : backends) {
+                if (backend.get() != backend_cpu) {
+                    ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend.get());
+                    break;
+                }
+            }
+        };
+
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
         // FIXME: fix in ggml_backend_sched
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer;
@@ -2228,6 +2240,20 @@ llm_graph_cb llama_context::graph_get_cb() const {
                     }
                 }
             }
+        }
+
+        // Large prompt batches default graph inputs to the CPU input backend. Pin the main prompt embedding
+        // and KV-cache write producers to the first accelerator backend so activations do not start life in host memory.
+        if (!full_offload && ubatch.n_tokens >= 32 && il == -1 &&
+                (strcmp(name, "inp_embd") == 0 || strcmp(name, "embd") == 0)) {
+            assign_first_accel_backend();
+        }
+
+        const bool quantized_kv = ggml_is_quantized(this->type_k) || ggml_is_quantized(this->type_v);
+
+        if (!full_offload && quantized_kv && ubatch.n_tokens >= 32 && il >= 0 &&
+                (strcmp(name, "Kcur") == 0 || strcmp(name, "Vcur") == 0)) {
+            assign_first_accel_backend();
         }
     };
 }

@@ -253,6 +253,9 @@ private:
 
     llama_cparams cparams;
 
+    ggml_type type_k;
+    ggml_type type_v;
+
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;
 
