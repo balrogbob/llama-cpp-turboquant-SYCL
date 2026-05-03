@@ -1,4 +1,4 @@
-# llama.cpp
+# llama.cpp.SYCL.Vulkan.TURBOMODE
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
 
@@ -8,7 +8,7 @@
 
 [Manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
 
-LLM inference in C/C++
+Universal LLM inference in C/C++
 
 ## Recent API changes
 
@@ -17,8 +17,8 @@ LLM inference in C/C++
 
 ## Hot topics
 
-- **SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow.**
-- **Added Delta checkpoints, for a moderate prompt cache ram savings and reduced memcopy on intel. Limited gains on other backends, aside from the lower ram usage for prompt cache.**
+- **Vulkan and SYCL TurboQuant is now supported in this fork, including turbo2/turbo3/turbo4 paths and a clean Windows `build-turbo` flow. Make sure to specify --device SYCL0 or --device Vulkan0 or the model may try to load via both backends! mmproj will always load via sycl, this seems to work better anyway.**
+- **Added Delta checkpoints, for a moderate prompt cache ram savings and reduced memcopy on intel. Not fully tested with Vulkan. Limited gains on other backends, aside from the lower ram usage for prompt cache.**
 - **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - Checkpoint Delta is tested working without issue with qwen3.6-35B-A3B. (All changes here are specifically targeted at Intel ARC A770 and qwen3.6. YMMV with non qwen 3/3.5/3.6 models (qwen3 models, including qwen3 coder next, confirmed working with delta checkpoints.) use --delta-cache to activate.
