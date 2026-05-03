@@ -16028,6 +16028,13 @@ static int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op) {
 static bool ggml_backend_vk_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_vk_device_context * dev_ctx = (ggml_backend_vk_device_context *)dev->context;
 
+    // TurboQuant injects TURBO_WHT into decode and attention paths, and its row count can be
+    // small enough to miss the generic offload threshold even when keeping it on Vulkan avoids
+    // CPU bottlenecks between GPU-resident TurboQuant ops.
+    if (op->op == GGML_OP_TURBO_WHT) {
+        return true;
+    }
+
     return ggml_vk_get_op_batch_size(op) >= dev_ctx->op_offload_min_batch_size;
 }
 

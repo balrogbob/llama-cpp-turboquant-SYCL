@@ -260,6 +260,15 @@ llama_kv_cache::llama_kv_cache(
                 }
                 // Auto-enable Boundary V (mode 7) when V is turbo2
                 if (type_v == GGML_TYPE_TURBO2_0 && hparams.n_layer >= 8) {
+                    const ggml_backend_dev_t dev0 = offload ? model.dev_layer(0) : nullptr;
+                    const char * dev0_name = dev0 ? ggml_backend_dev_name(dev0) : nullptr;
+                    const bool is_vulkan = dev0_name && std::strncmp(dev0_name, "Vulkan", 6) == 0;
+
+                    if (is_vulkan) {
+                        LLAMA_LOG_INFO("llama_kv_cache: Boundary V auto-disabled for turbo2-V on Vulkan because mixed turbo2/q8_0 KV falls back from Vulkan flash attention (set TURBO_LAYER_ADAPTIVE=7 to force it)\n");
+                        return 0;
+                    }
+
                     LLAMA_LOG_INFO("llama_kv_cache: Boundary V auto-enabled for turbo2-V (opt-out: TURBO_LAYER_ADAPTIVE=0)\n");
                     return 7;
                 }
