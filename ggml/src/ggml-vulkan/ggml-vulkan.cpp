@@ -3067,6 +3067,10 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
     FaCodePath path = device->coopmat2 ? FA_COOPMAT2 :
                       device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
 
+    if (kv_type == GGML_TYPE_TURBO2_0 || kv_type == GGML_TYPE_TURBO3_0 || kv_type == GGML_TYPE_TURBO4_0) {
+        path = FA_SCALAR;
+    }
+
     if (path == FA_COOPMAT1 && device->architecture == vk_device_architecture::NVIDIA_TURING) {
         // Nvidia compiler bug, see https://github.com/ggml-org/llama.cpp/pull/19075#issuecomment-3820716090
         path = FA_SCALAR;
@@ -15533,6 +15537,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_IQ4_NL:
                     case GGML_TYPE_MXFP4:
                     case GGML_TYPE_NVFP4:
+                    case GGML_TYPE_TURBO2_0:
+                    case GGML_TYPE_TURBO3_0:
+                    case GGML_TYPE_TURBO4_0:
                     case GGML_TYPE_TQ4_1S:
                         break;
                     default:
@@ -15598,13 +15605,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     break;
                 case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q8_0:
-                case GGML_TYPE_TURBO2_0:
-                case GGML_TYPE_TURBO3_0:
-                case GGML_TYPE_TURBO4_0:
                     // Quantized K/V FA is currently producing bad output for Vulkan Qwen
                     // when both K and V use the same quantized cache type. Keep the known-good
                     // mixed/F16 cache paths and fall back for the fully-quantized case.
                     return false;
+                case GGML_TYPE_TURBO2_0:
+                case GGML_TYPE_TURBO3_0:
+                case GGML_TYPE_TURBO4_0:
+                    // TurboQuant KV still needs Vulkan FA, but keep it on the scalar path until
+                    // the cooperative-matrix variants are proven correct.
+                    break;
                 // K dequants currently disabled because D dimension is rounded up to 256 and runs inefficiently
                 //case GGML_TYPE_Q2_K:
                 //case GGML_TYPE_Q3_K:
