@@ -10062,6 +10062,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
 
     std::array<uint32_t, 3> elements;
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch"
     switch (op) {
     case GGML_OP_NORM:
     case GGML_OP_RMS_NORM_BACK:
@@ -10314,6 +10316,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         elements = { (uint32_t)ggml_nelements(src0), 1, 1 };
         break;
     }
+#pragma GCC diagnostic pop
 
     if (op == GGML_OP_ADD || op == GGML_OP_RMS_NORM) {
         vk_subbuffer a_buf = src0_buf;

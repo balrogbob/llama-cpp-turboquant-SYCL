@@ -40,7 +40,7 @@ constexpr uint32_t SERVER_CHECKPOINT_MAX_DELTA_DEPTH = 8;
 
 static constexpr llama_state_seq_flags SERVER_CHECKPOINT_FLAGS = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
 
-static server_prompt_checkpoint server_get_checkpoint(llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1) {
+static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, bool on_device, llama_pos pos_min = -1, llama_pos pos_max = -1) {
     if (pos_min == -1) {
         pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), id);
     }
@@ -48,7 +48,10 @@ static server_prompt_checkpoint server_get_checkpoint(llama_context * ctx, int i
         pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), id);
     }
 
-    const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    auto flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+    if (on_device) {
+        flags |= LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
+    }
 
     auto cur = server_prompt_checkpoint {
         /*.pos_min       = */ pos_min,
@@ -65,8 +68,6 @@ static server_prompt_checkpoint server_get_checkpoint(llama_context * ctx, int i
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
-
-    return cur;
 }
 
 static bool server_checkpoint_can_use_delta(
@@ -467,7 +468,12 @@ struct server_slot {
                 if (!spec_draft.empty() && ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
                     const auto n_tokens = prompt.tokens.size();
 
-                    spec_ckpt = server_get_checkpoint(ctx, this->id, n_tokens);
+                    //const int64_t t_start = ggml_time_us();
+
+                    server_prompt_checkpoint_update(spec_ckpt, ctx, this->id, n_tokens, true);
+
+                    //const int64_t t_total = ggml_time_us() - t_start;
+                    //printf("checkpoint total: %f ms\n", t_total / 1000.0);
 
                     SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
                             spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.data.size() / 1024 / 1024);
@@ -3123,7 +3129,7 @@ private:
                             SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n",
                                     ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
-                            const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data.data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                            const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data.data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
                             if (n != ckpt.size()) {
                                 GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
                                         __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt.size(), n);
